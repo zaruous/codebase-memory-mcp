@@ -14,7 +14,7 @@
 #include "foundation/compat_thread.h"
 #include "pipeline/worker_pool.h"
 #include "simhash/minhash.h"
-#include "nomic/code_vectors.h"
+#include "bge_m3/code_vectors.h"
 
 #define XXH_INLINE_ALL
 #include "xxhash/xxhash.h"
@@ -172,8 +172,8 @@ int cbm_sem_tokenize(const char *name, char **out, int max_out) {
     int blen = 0;
 
     for (int i = 0; name[i] && count < max_out; i++) {
-        char c = name[i];
-        bool split = is_token_delim(c);
+        unsigned char uc = (unsigned char)name[i];
+        bool split = is_token_delim((char)uc);
         bool camel = is_camel_break(name, i);
         if (split || camel) {
             flush_token(buf, &blen, out, &count, max_out);
@@ -181,8 +181,13 @@ int cbm_sem_tokenize(const char *name, char **out, int max_out) {
                 continue;
             }
         }
-        if (blen < TOKEN_BUF_LEN - SKIP_ONE && isalnum((unsigned char)c)) {
-            buf[blen++] = (char)tolower((unsigned char)c);
+        if (blen < TOKEN_BUF_LEN - SKIP_ONE) {
+            if (uc >= 0x80) {
+                /* UTF-8 multibyte byte: store raw, no case folding */
+                buf[blen++] = (char)uc;
+            } else if (isalnum(uc)) {
+                buf[blen++] = (char)tolower(uc);
+            }
         }
     }
     flush_token(buf, &blen, out, &count, max_out);
@@ -440,7 +445,7 @@ void cbm_sem_random_index(const char *token, cbm_sem_vec_t *out) {
         return;
     }
 
-    /* Try pretrained nomic-embed-code vector first (768d, distilled from 7B). */
+    /* Try pretrained bge-m3 vector first (1024d, multilingual). */
     ensure_pretrained_map();
     const char *idx_str = cbm_ht_get(g_pretrained_map, token);
     if (idx_str) {
@@ -1071,7 +1076,7 @@ typedef struct {
     _Atomic int next_idx;
 } src_build_ctx_t;
 
-/* Build one src_entry for a token: dense float32 reference if in nomic vocab,
+/* Build one src_entry for a token: dense float32 reference if in bge-m3 vocab,
  * sparse inline representation otherwise. Collisions in the sparse hash are
  * merged and zeros filtered so the final representation is exactly the same
  * mathematical vector that the old dense path produced. */

@@ -44,8 +44,8 @@ from transformers import AutoModel, AutoTokenizer
 
 # ── Configuration ──────────────────────────────────────────────────────
 
-MODEL_NAME = "nomic-ai/nomic-embed-code"
-OUTPUT_DIM = 768          # Target dimension (Matryoshka truncation if model outputs more)
+MODEL_NAME = "BAAI/bge-m3"
+OUTPUT_DIM = 1024         # bge-m3 native dimension
 SIM_ATTENTION_K = 32      # Top-K neighbors for simulated attention
 SIM_ATTENTION_ITERS = 3   # Number of simulated attention iterations
 SIM_ATTENTION_ALPHA = 0.3 # Blend ratio: (1-α)×original + α×neighbor_mean
@@ -58,15 +58,15 @@ CHECKPOINT_EVERY = 500    # Save checkpoint every N tokens
 def is_code_relevant(token_str: str) -> bool:
     """Filter vocabulary to code-relevant tokens.
 
-    Goal: keep tokens that our runtime camelCase/snake_case splitter would
-    produce from identifiers. Reject BPE noise, punctuation combos, and
-    non-Latin scripts.
+    Goal: keep tokens that our runtime tokenizer would produce from
+    identifiers (Latin) or natural-language words in docstrings (multilingual).
+    Reject BPE noise and punctuation combos.
     """
     s = token_str.strip()
     if not s:
         return False
 
-    # Remove BPE markers (Ġ = space prefix, ▁ = sentencepiece, Ċ/ċ = newline in Qwen)
+    # Remove BPE markers (Ġ = space prefix, ▁ = sentencepiece)
     clean = s.lstrip("\u0120\u2581")  # Ġ, ▁
     if not clean:
         return False
@@ -82,12 +82,13 @@ def is_code_relevant(token_str: str) -> bool:
     if not inner:
         return False
 
-    # STRICT: must be purely alphanumeric + underscores (identifier-shaped)
-    # This rejects BPE noise like "!");ċ", "!!!!ċċ", etc.
-    if not re.match(r'^[a-zA-Z][a-zA-Z0-9_]*$', inner):
+    # Accept Latin identifiers (code) or pure non-ASCII words (multilingual docstrings).
+    # Reject mixed punctuation noise like "!");ċ" or "!!!!"
+    is_latin_ident = bool(re.match(r'^[a-zA-Z][a-zA-Z0-9_]*$', inner))
+    is_multiling = bool(re.match(r'^[^\x00-\x7F]+$', inner))  # all non-ASCII
+    if not is_latin_ident and not is_multiling:
         return False
 
-    # Must be at least 2 chars of actual content
     if len(inner) < 2:
         return False
 
@@ -101,8 +102,9 @@ def clean_token(token_str: str) -> str:
     s = s.lstrip("\u0120\u2581")
     # Strip leading/trailing underscores
     s = s.strip("_")
-    # Lowercase (our runtime tokenizer lowercases)
-    s = s.lower()
+    # Lowercase Latin only; non-ASCII (CJK etc.) has no case to fold
+    if re.match(r'^[a-zA-Z0-9_]+$', s):
+        s = s.lower()
     return s
 
 
