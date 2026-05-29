@@ -206,7 +206,7 @@ SIMHASH_SRCS = src/simhash/minhash.c
 SEMANTIC_SRCS = src/semantic/semantic.c src/semantic/ast_profile.c
 
 # bge-m3 pretrained vectors (assembler blob)
-UNIXCODER_BLOB_SRC = vendored/bge_m3/code_vectors_blob.S
+UNIXCODER_BLOB_SRC = vendored/nomic/code_vectors_blob.S
 
 # Traces module (new)
 TRACES_SRCS = src/traces/traces.c
@@ -463,7 +463,7 @@ $(BUILD_DIR)/test_zstd.o: $(CBM_DIR)/vendored/zstd/zstd.c | $(BUILD_DIR)
 
 # bge-m3 pretrained vector blob
 UNIXCODER_OBJ = $(BUILD_DIR)/unixcoder_blob.o
-$(UNIXCODER_OBJ): $(UNIXCODER_BLOB_SRC) vendored/bge_m3/code_vectors.bin | $(BUILD_DIR)
+$(UNIXCODER_OBJ): $(UNIXCODER_BLOB_SRC) vendored/nomic/code_vectors.bin | $(BUILD_DIR)
 	$(CC) -c -o $@ $<
 
 OBJS_VENDORED_TEST = $(MIMALLOC_OBJ_TEST) $(SQLITE3_OBJ_TEST) $(TRE_OBJ_TEST) $(GRAMMAR_OBJS_TEST) $(TS_RUNTIME_OBJ_TEST) $(LSP_OBJ_TEST) $(PP_OBJ_TEST) $(MONGOOSE_OBJ_TEST) $(LZ4_OBJ_TEST) $(ZSTD_OBJ_TEST) $(UNIXCODER_OBJ)
