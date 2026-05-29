@@ -100,11 +100,25 @@ static inline const int8_t *pretrained_vec_at(int i) {{
     )
 print("  wrote code_vectors.h")
 
-# code_vectors_blob.S  — ELF / MinGW syntax (no leading underscore, .rodata section)
+# code_vectors_blob.S  — cross-platform (macOS/Windows/Linux)
 with open(out_dir / "code_vectors_blob.S", "w", encoding="utf-8") as f:
     f.write(
-        f"""/* bge-m3 vector blob — assembler incbin (ELF / MinGW) */
-    .section .rodata
+        f"""/* bge-m3 vector blob — assembler incbin (cross-platform) */
+#if defined(__APPLE__)
+    .section __DATA,__const
+    .globl _PRETRAINED_VECTOR_BLOB
+    .globl _PRETRAINED_VECTOR_BLOB_LEN
+    .p2align 4
+_PRETRAINED_VECTOR_BLOB:
+    .incbin "{incbin_path}"
+_PRETRAINED_VECTOR_BLOB_END:
+
+    .section __DATA,__const
+    .p2align 2
+_PRETRAINED_VECTOR_BLOB_LEN:
+    .long _PRETRAINED_VECTOR_BLOB_END - _PRETRAINED_VECTOR_BLOB
+#elif defined(_WIN32) || defined(__CYGWIN__) || defined(__MINGW32__)
+    .section .rdata,"dr"
     .globl PRETRAINED_VECTOR_BLOB
     .globl PRETRAINED_VECTOR_BLOB_LEN
     .p2align 4
@@ -112,10 +126,24 @@ PRETRAINED_VECTOR_BLOB:
     .incbin "{incbin_path}"
 PRETRAINED_VECTOR_BLOB_END:
 
-    .section .rodata
+    .section .rdata,"dr"
     .p2align 2
 PRETRAINED_VECTOR_BLOB_LEN:
     .long PRETRAINED_VECTOR_BLOB_END - PRETRAINED_VECTOR_BLOB
+#else
+    .section .rodata,"a",@progbits
+    .globl PRETRAINED_VECTOR_BLOB
+    .globl PRETRAINED_VECTOR_BLOB_LEN
+    .p2align 4
+PRETRAINED_VECTOR_BLOB:
+    .incbin "{incbin_path}"
+PRETRAINED_VECTOR_BLOB_END:
+
+    .section .rodata,"a",@progbits
+    .p2align 2
+PRETRAINED_VECTOR_BLOB_LEN:
+    .long PRETRAINED_VECTOR_BLOB_END - PRETRAINED_VECTOR_BLOB
+#endif
 """
     )
 print("  wrote code_vectors_blob.S")
