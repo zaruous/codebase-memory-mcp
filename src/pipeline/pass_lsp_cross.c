@@ -63,15 +63,18 @@ static char *pxc_read_file(const char *path, int *out_len) {
         (void)fclose(f);
         return NULL;
     }
-    char *buf = (char *)malloc((size_t)size + 1);
+    /* +pad: tree-sitter lexer lookahead reads past EOF; keep it in-bounds */
+    enum { CBM_TS_LOOKAHEAD_PAD = 16 };
+    char *buf = (char *)malloc((size_t)size + CBM_TS_LOOKAHEAD_PAD);
     if (!buf) {
         (void)fclose(f);
         return NULL;
     }
     size_t nread = fread(buf, 1, (size_t)size, f);
     (void)fclose(f);
-    if (nread > (size_t)size) nread = (size_t)size;
-    buf[nread] = '\0';
+    if (nread > (size_t)size)
+        nread = (size_t)size;
+    memset(buf + nread, 0, CBM_TS_LOOKAHEAD_PAD);
     *out_len = (int)nread;
     return buf;
 }
