@@ -29,9 +29,9 @@
 
 /* ── Configuration ───────────────────────────────────────────────── */
 
-/* Random Indexing dimension. 256 is sufficient for <500K functions. */
-/* 1024 = bge-m3 embedding dimension.  Matches PRETRAINED_DIM. */
-enum { CBM_SEM_DIM = 1024 };
+/* Vector dimension: must match PRETRAINED_DIM in nomic/code_vectors.h (768).
+ * Random-indexing fallback also uses this dimension for a consistent vector space. */
+enum { CBM_SEM_DIM = 768 };
 
 /* Random Indexing: non-zero entries per sparse random vector. */
 enum { CBM_SEM_SPARSE_NNZE = 8 };

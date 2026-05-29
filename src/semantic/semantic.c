@@ -445,7 +445,7 @@ void cbm_sem_random_index(const char *token, cbm_sem_vec_t *out) {
         return;
     }
 
-    /* Try pretrained bge-m3 vector first (1024d, multilingual). */
+    /* Try pretrained nomic-embed-code vector first (768d, code-focused). */
     ensure_pretrained_map();
     const char *idx_str = cbm_ht_get(g_pretrained_map, token);
     if (idx_str) {
@@ -453,7 +453,7 @@ void cbm_sem_random_index(const char *token, cbm_sem_vec_t *out) {
         long idx = strtol(idx_str, &end, BASE_DECIMAL);
         if (end != idx_str && idx >= 0 && idx < PRETRAINED_TOKEN_COUNT) {
             const int8_t *pvec = pretrained_vec_at((int)idx);
-            for (int d = 0; d < CBM_SEM_DIM && d < PRETRAINED_DIM; d++) {
+            for (int d = 0; d < CBM_SEM_DIM; d++) {
                 out->v[d] = (float)pvec[d] / CBM_SEM_INT8_MAX;
             }
             return;
