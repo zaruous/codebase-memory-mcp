@@ -462,6 +462,16 @@ $(BUILD_DIR)/test_zstd.o: $(CBM_DIR)/vendored/zstd/zstd.c | $(BUILD_DIR)
 	$(CC) -std=c11 -D_DEFAULT_SOURCE -g -O1 $(SANITIZE) -w -I$(CBM_DIR)/vendored/zstd -c -o $@ $<
 
 # bge-m3 pretrained vector blob
+# Guard: fail fast with a clear message if the binary blob is missing.
+# Run 'scripts/setup-vectors.sh' (or .ps1 on Windows) to download or extract it.
+vendored/bge_m3_real/code_vectors.bin:
+	@echo ""
+	@echo "ERROR: vendored/bge_m3_real/code_vectors.bin is missing."
+	@echo "  Download:  scripts/setup-vectors.sh"
+	@echo "  Extract:   scripts/setup-vectors.sh --extract   (requires Docker)"
+	@echo ""
+	@exit 1
+
 UNIXCODER_OBJ = $(BUILD_DIR)/unixcoder_blob.o
 $(UNIXCODER_OBJ): $(UNIXCODER_BLOB_SRC) vendored/bge_m3_real/code_vectors.bin | $(BUILD_DIR)
 	$(CC) -c -o $@ $<

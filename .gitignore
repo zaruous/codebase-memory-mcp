@@ -53,3 +53,8 @@ CHANGELOG.md
 
 # Soak test output
 soak-results/
+
+# BGE-M3 extracted vectors (170MB binary — not tracked in git)
+# Run scripts/setup-vectors.sh (or .ps1) to download or extract locally.
+vendored/bge_m3_real/code_vectors.bin
+vendored/bge_m3_real/*.npz
