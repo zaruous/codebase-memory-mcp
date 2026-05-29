@@ -41,6 +41,11 @@ os.environ.setdefault("MKL_NUM_THREADS", str(NUM_THREADS))
 
 from transformers import AutoModel, AutoTokenizer
 
+try:
+    import requests as _requests
+except ImportError:
+    _requests = None
+
 
 # ── Configuration ──────────────────────────────────────────────────────
 
@@ -169,6 +174,61 @@ def simulated_attention(vectors: np.ndarray, k: int, iterations: int,
 
 
 # ── Extraction ───────────────────────────────────────────────────────
+
+def extract_embeddings_tei(tokens: list, tei_url: str,
+                            batch_size: int = 256,
+                            checkpoint_path: str = None) -> np.ndarray:
+    """Use HuggingFace TEI HTTP API for embedding inference. Returns (N, D) float32."""
+    if _requests is None:
+        raise RuntimeError("pip install requests")
+
+    start_idx = 0
+    all_vecs = []
+    if checkpoint_path and os.path.exists(checkpoint_path):
+        try:
+            data = np.load(checkpoint_path)
+            all_vecs = list(data["vectors"])
+            start_idx = len(all_vecs)
+            print(f"  resuming from checkpoint: {start_idx}/{len(tokens)} tokens")
+        except Exception as e:
+            print(f"  WARNING: corrupt checkpoint ({e}), starting fresh")
+            os.remove(checkpoint_path)
+
+    total = len(tokens)
+    t0 = time.time()
+    url = tei_url.rstrip("/") + "/embed"
+    # TEI max_client_batch_size is typically 32 — cap to avoid 413 errors
+    api_batch = min(batch_size, 32)
+
+    for batch_start in range(start_idx, total, api_batch):
+        batch_end = min(batch_start + api_batch, total)
+        batch_tokens = tokens[batch_start:batch_end]
+
+        resp = _requests.post(url, json={"inputs": batch_tokens}, timeout=120)
+        resp.raise_for_status()
+        vecs = np.array(resp.json(), dtype=np.float32)
+        all_vecs.extend(vecs)
+
+        done = batch_end
+        elapsed = time.time() - t0
+        rate = (done - start_idx) / elapsed if elapsed > 0 else 0
+        eta = (total - done) / rate if rate > 0 else 0
+        print(
+            f"  [{done:>6}/{total}] "
+            f"{rate:.1f} tok/s  "
+            f"ETA {eta / 60:.0f}m",
+            flush=True
+        )
+
+        if checkpoint_path and (done % CHECKPOINT_EVERY < api_batch):
+            np.savez_compressed(
+                checkpoint_path,
+                vectors=np.array(all_vecs, dtype=np.float32)
+            )
+
+    print()
+    return np.array(all_vecs, dtype=np.float32)
+
 
 def extract_embeddings(model, tokenizer, tokens: list, device: str,
                        batch_size: int = 64,
@@ -353,26 +413,32 @@ def main():
                         help=f"Batch size (default: {BATCH_SIZE})")
     parser.add_argument("--checkpoint", default=None,
                         help="Checkpoint file path (auto: <output-dir>/checkpoint.npz)")
+    parser.add_argument("--tei-url", default=None,
+                        help="Use HuggingFace TEI server instead of local model (e.g. http://localhost:8080)")
     args = parser.parse_args()
 
     batch_size = args.batch_size
-
-    # Auto-detect device
-    # Prefer CPU for 7B models on Apple Silicon — MPS shares unified memory
-    # with the system and can cause OOM/crashes. CPU keeps allocation predictable.
-    # Use --device mps to override if you have enough headroom (32GB+).
-    if args.device:
-        device = args.device
-    elif torch.cuda.is_available():
-        device = "cuda"
-    else:
-        device = "cpu"
+    use_tei = args.tei_url is not None
 
     # Force line-buffered stdout so tee/log sees output immediately
     sys.stdout.reconfigure(line_buffering=True)
 
-    print(f"device={device}")
-    print(f"threads={torch.get_num_threads()}")
+    if use_tei:
+        print(f"mode=tei  url={args.tei_url}")
+    else:
+        # Auto-detect device
+        # Prefer CPU for 7B models on Apple Silicon — MPS shares unified memory
+        # with the system and can cause OOM/crashes. CPU keeps allocation predictable.
+        # Use --device mps to override if you have enough headroom (32GB+).
+        if args.device:
+            device = args.device
+        elif torch.cuda.is_available():
+            device = "cuda"
+        else:
+            device = "cpu"
+        print(f"device={device}")
+        print(f"threads={torch.get_num_threads()}")
+
     print(f"model={MODEL_NAME}")
     print(f"output_dim={OUTPUT_DIM}")
     print()
@@ -384,19 +450,35 @@ def main():
     checkpoint_path = args.checkpoint or str(out_dir / "checkpoint.npz")
 
     # ── Step 1: Load model + tokenizer ──
-    print("step 1: loading model + tokenizer...")
-    t0 = time.time()
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
-    model = AutoModel.from_pretrained(
-        MODEL_NAME,
-        trust_remote_code=True,
-        dtype=torch.float16,             # ~570M×2B = ~1.1GB (vs ~2.2GB float32)
-        low_cpu_mem_usage=True,          # Stream weights, no 2x peak during load
-    )
-    model = model.to(device)
-    print(f"  loaded in {time.time() - t0:.1f}s")
-    print(f"  hidden_size={model.config.hidden_size}")
-    print(f"  vocab_size={tokenizer.vocab_size}")
+    if use_tei:
+        print("step 1: loading tokenizer only (TEI handles model inference)...")
+        t0 = time.time()
+        tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
+        print(f"  tokenizer loaded in {time.time() - t0:.1f}s")
+        print(f"  vocab_size={tokenizer.vocab_size}")
+        # Verify TEI is reachable
+        try:
+            info = _requests.get(args.tei_url.rstrip("/") + "/info", timeout=10)
+            info.raise_for_status()
+            d = info.json()
+            print(f"  TEI model_id={d.get('model_id','?')}  max_batch_tokens={d.get('max_batch_tokens','?')}")
+        except Exception as e:
+            print(f"  WARNING: could not reach TEI at {args.tei_url}: {e}")
+        model = None
+    else:
+        print("step 1: loading model + tokenizer...")
+        t0 = time.time()
+        tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
+        model = AutoModel.from_pretrained(
+            MODEL_NAME,
+            trust_remote_code=True,
+            dtype=torch.float16,             # ~570M×2B = ~1.1GB (vs ~2.2GB float32)
+            low_cpu_mem_usage=True,          # Stream weights, no 2x peak during load
+        )
+        model = model.to(device)
+        print(f"  loaded in {time.time() - t0:.1f}s")
+        print(f"  hidden_size={model.config.hidden_size}")
+        print(f"  vocab_size={tokenizer.vocab_size}")
     print()
 
     # ── Step 2: Filter vocabulary ──
@@ -429,10 +511,17 @@ def main():
     # ── Step 3: Extract embeddings (full inference) ──
     print(f"step 3: extracting embeddings ({len(filtered_tokens)} tokens, batch_size={batch_size})...")
     t0 = time.time()
-    vectors = extract_embeddings(
-        model, tokenizer, filtered_tokens, device,
-        batch_size=batch_size, checkpoint_path=checkpoint_path
-    )
+    if use_tei:
+        tei_batch = args.batch_size if args.batch_size != BATCH_SIZE else 256
+        vectors = extract_embeddings_tei(
+            filtered_tokens, args.tei_url,
+            batch_size=tei_batch, checkpoint_path=checkpoint_path
+        )
+    else:
+        vectors = extract_embeddings(
+            model, tokenizer, filtered_tokens, device,
+            batch_size=batch_size, checkpoint_path=checkpoint_path
+        )
     elapsed = time.time() - t0
     print(f"  extracted {vectors.shape[0]} vectors × {vectors.shape[1]}d in {elapsed:.0f}s")
 

@@ -14,7 +14,7 @@
 #include "foundation/compat_thread.h"
 #include "pipeline/worker_pool.h"
 #include "simhash/minhash.h"
-#include "bge_m3/code_vectors.h"
+#include "bge_m3_real/code_vectors.h"
 
 #define XXH_INLINE_ALL
 #include "xxhash/xxhash.h"

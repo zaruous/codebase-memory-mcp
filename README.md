@@ -143,7 +143,7 @@ Removes all agent configs, skills, hooks, and instructions. Does not remove the 
 - **Cypher-like queries**: `MATCH (f:Function)-[:CALLS]->(g) WHERE f.name = 'main' RETURN g.name`
 
 ### Search
-- **Semantic search** (`semantic_query`): vector search across the entire graph, powered by bundled Nomic `nomic-embed-code` embeddings (40K tokens, 768d int8) compiled into the binary — no API key, no Ollama, no Docker. 11-signal combined scoring (TF-IDF, RRI, API/Type/Decorator signatures, AST profiles, data flow, Halstead-lite, MinHash, module proximity, graph diffusion).
+- **Semantic search** (`semantic_query`): vector search across the entire graph, powered by bundled BAAI/bge-m3 multilingual embeddings (174K tokens, 1024d int8, Korean/Japanese/Chinese/Arabic/etc.) compiled into the binary — no API key, no Ollama, no Docker. 11-signal combined scoring (TF-IDF, RRI, API/Type/Decorator signatures, AST profiles, data flow, Halstead-lite, MinHash, module proximity, graph diffusion).
 - **BM25 full-text search** via SQLite FTS5 with `cbm_camel_split` tokenizer (camelCase / snake_case aware)
 - **Structural search** (`search_graph`): regex name patterns, label filters, min/max degree, file scoping
 - **Code search** (`search_code`): graph-augmented grep over indexed files only
@@ -164,7 +164,7 @@ Removes all agent configs, skills, hooks, and instructions. Does not remove the 
 - `EMITS`, `LISTENS_ON` (channels)
 - `DATA_FLOWS` with arg-to-param mapping + field access chains
 - `SIMILAR_TO` (MinHash + LSH near-clone detection, Jaccard scored)
-- `SEMANTICALLY_RELATED` (vocabulary-mismatch, same-language, score ≥ 0.80)
+- `SEMANTICALLY_RELATED` (11-signal semantic similarity, score ≥ 0.75, multilingual)
 
 ### Indexing pipeline
 - **155 vendored tree-sitter grammars** compiled into the binary
@@ -425,6 +425,32 @@ codebase-memory-mcp config set auto_index_limit 50000    # max files for auto-in
 codebase-memory-mcp config reset auto_index              # reset to default
 ```
 
+### HTTP MCP Transport
+
+Enable the MCP Streamable HTTP transport (2025-03-26 spec) alongside stdio:
+
+```bash
+codebase-memory-mcp --mcp-http=true          # enable on port 9748 (persisted)
+codebase-memory-mcp --mcp-http-port=9748     # change port (persisted)
+codebase-memory-mcp --mcp-http-local=false   # allow remote access (default: 127.0.0.1 only)
+codebase-memory-mcp --mcp-http-path=/mcp     # context path (default: /mcp)
+```
+
+Endpoints: `POST /mcp` (JSON-RPC), `GET /mcp` (SSE), `GET /mcp/health`.
+
+Write tools (`index_repository`, `delete_project`, `index_status`, `ingest_traces`) are intentionally blocked on the HTTP transport — safe to expose to remote read-only clients.
+
+To connect an agent via HTTP instead of stdio:
+```json
+{
+  "mcpServers": {
+    "codebase-memory-mcp": {
+      "url": "http://localhost:9748/mcp"
+    }
+  }
+}
+```
+
 ### Environment Variables
 
 | Variable | Default | Description |
@@ -432,6 +458,8 @@ codebase-memory-mcp config reset auto_index              # reset to default
 | `CBM_CACHE_DIR` | `~/.cache/codebase-memory-mcp` | Override the database storage directory. All project indexes and config are stored here. |
 | `CBM_DIAGNOSTICS` | `false` | Set to `1` or `true` to enable periodic diagnostics output to `/tmp/cbm-diagnostics-<pid>.json`. |
 | `CBM_DOWNLOAD_URL` | *(GitHub releases)* | Override the download URL for updates. Used for testing or self-hosted deployments. |
+| `CBM_SEMANTIC_ENABLED` | `false` | Set to `1` or `true` to enable semantic embedding (BGE-M3, 1024d). |
+| `CBM_SEMANTIC_THRESHOLD` | `0.75` | Cosine similarity threshold for `SEMANTICALLY_RELATED` edges (range: 0.0–1.0). |
 
 ```bash
 # Store indexes in a custom directory
@@ -488,7 +516,8 @@ Also supported (not yet benchmarked): Ada, Agda, Apex, Assembly (NASM), Astro, A
 ```
 src/
   main.c              Entry point (MCP stdio server + CLI + install/update/config)
-  mcp/                MCP server (14 tools, JSON-RPC 2.0, session detection, auto-index)
+  mcp/                MCP stdio server (14 tools, JSON-RPC 2.0, session detection, auto-index)
+  mcp/mcp_http.c      MCP Streamable HTTP transport (2025-03-26 spec, read-only tools, SSE)
   cli/                Install/uninstall/update/config (10 agents, hooks, instructions)
   store/              SQLite graph storage (nodes, edges, traversal, search, Louvain)
   pipeline/           Multi-pass indexing (structure → definitions → calls → HTTP links → config → tests)
@@ -497,6 +526,7 @@ src/
   watcher/            Background auto-sync (git polling, adaptive intervals)
   traces/             Runtime trace ingestion
   ui/                 Embedded HTTP server + 3D graph visualization
+  semantic/           11-signal semantic embeddings (BGE-M3 1024d, 174K multilingual tokens)
   foundation/         Platform abstractions (threads, filesystem, logging, memory)
 internal/cbm/         Vendored tree-sitter grammars (155 languages) + AST extraction engine
 ```

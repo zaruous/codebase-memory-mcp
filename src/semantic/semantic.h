@@ -29,9 +29,9 @@
 
 /* ── Configuration ───────────────────────────────────────────────── */
 
-/* Vector dimension: must match PRETRAINED_DIM in nomic/code_vectors.h (768).
+/* Vector dimension: must match PRETRAINED_DIM in bge_m3_real/code_vectors.h (1024).
  * Random-indexing fallback also uses this dimension for a consistent vector space. */
-enum { CBM_SEM_DIM = 768 };
+enum { CBM_SEM_DIM = 1024 };
 
 /* Random Indexing: non-zero entries per sparse random vector. */
 enum { CBM_SEM_SPARSE_NNZE = 8 };
