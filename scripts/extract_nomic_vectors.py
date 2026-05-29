@@ -1,23 +1,23 @@
 #!/usr/bin/env python3
 """
-Extract token embeddings from nomic-embed-code (7B) for static lookup table.
+Extract token embeddings from BAAI/bge-m3 (~570M params, XLM-RoBERTa-large base).
 
-Loads the full model, filters the vocabulary to code-relevant tokens,
-runs full inference on each token, applies simulated attention, quantizes
-to int8, and outputs files compatible with vendored/unixcoder/ format.
+Loads the model, filters the vocabulary to code-relevant + multilingual tokens,
+runs full inference on each token (CLS pooling), applies simulated attention,
+quantizes to int8, and writes files for static binary embedding lookup.
 
 Usage:
-    pip3.9 install torch transformers sentence-transformers
-    python3.9 scripts/extract_nomic_vectors.py [--output-dir vendored/nomic]
+    pip install torch transformers
+    python3 scripts/extract_nomic_vectors.py [--output-dir vendored/bge_m3]
 
 Output:
-    code_vectors.bin   — [int32 count][int32 dim] + count×dim int8
-    code_tokens.txt    — one token per line
-    code_tokens.h      — C header: static const char *PRETRAINED_TOKENS[N]
-    code_vectors.h     — C header: defines + inline accessor
+    code_vectors.bin    — [int32 count][int32 dim] + count×dim int8
+    code_tokens.txt     — one token per line
+    code_tokens.h       — C header: static const char *PRETRAINED_TOKENS[N]
+    code_vectors.h      — C header: defines + inline accessor
     code_vectors_blob.S — assembler .incbin
 
-One-time extraction. ~2-3h on GPU, ~6-10h on M3 Pro CPU (float16, ~14GB RAM).
+One-time extraction. ~30m on GPU, ~2-3h on CPU (~2GB RAM, float16).
 """
 
 import argparse
@@ -44,8 +44,8 @@ from transformers import AutoModel, AutoTokenizer
 
 # ── Configuration ──────────────────────────────────────────────────────
 
-MODEL_NAME = "nomic-ai/nomic-embed-code"
-OUTPUT_DIM = 768          # Target dimension (Matryoshka truncation if model outputs more)
+MODEL_NAME = "BAAI/bge-m3"
+OUTPUT_DIM = 1024         # bge-m3 native dimension
 SIM_ATTENTION_K = 32      # Top-K neighbors for simulated attention
 SIM_ATTENTION_ITERS = 3   # Number of simulated attention iterations
 SIM_ATTENTION_ALPHA = 0.3 # Blend ratio: (1-α)×original + α×neighbor_mean
@@ -58,15 +58,15 @@ CHECKPOINT_EVERY = 500    # Save checkpoint every N tokens
 def is_code_relevant(token_str: str) -> bool:
     """Filter vocabulary to code-relevant tokens.
 
-    Goal: keep tokens that our runtime camelCase/snake_case splitter would
-    produce from identifiers. Reject BPE noise, punctuation combos, and
-    non-Latin scripts.
+    Goal: keep tokens that our runtime tokenizer would produce from
+    identifiers (Latin) or natural-language words in docstrings (multilingual).
+    Reject BPE noise and punctuation combos.
     """
     s = token_str.strip()
     if not s:
         return False
 
-    # Remove BPE markers (Ġ = space prefix, ▁ = sentencepiece, Ċ/ċ = newline in Qwen)
+    # Remove BPE markers (Ġ = space prefix, ▁ = sentencepiece)
     clean = s.lstrip("\u0120\u2581")  # Ġ, ▁
     if not clean:
         return False
@@ -82,12 +82,13 @@ def is_code_relevant(token_str: str) -> bool:
     if not inner:
         return False
 
-    # STRICT: must be purely alphanumeric + underscores (identifier-shaped)
-    # This rejects BPE noise like "!");ċ", "!!!!ċċ", etc.
-    if not re.match(r'^[a-zA-Z][a-zA-Z0-9_]*$', inner):
+    # Accept Latin identifiers (code) or pure non-ASCII words (multilingual docstrings).
+    # Reject mixed punctuation noise like "!");ċ" or "!!!!"
+    is_latin_ident = bool(re.match(r'^[a-zA-Z][a-zA-Z0-9_]*$', inner))
+    is_multiling = bool(re.match(r'^[^\x00-\x7F]+$', inner))  # all non-ASCII
+    if not is_latin_ident and not is_multiling:
         return False
 
-    # Must be at least 2 chars of actual content
     if len(inner) < 2:
         return False
 
@@ -101,8 +102,9 @@ def clean_token(token_str: str) -> str:
     s = s.lstrip("\u0120\u2581")
     # Strip leading/trailing underscores
     s = s.strip("_")
-    # Lowercase (our runtime tokenizer lowercases)
-    s = s.lower()
+    # Lowercase Latin only; non-ASCII (CJK etc.) has no case to fold
+    if re.match(r'^[a-zA-Z0-9_]+$', s):
+        s = s.lower()
     return s
 
 
@@ -191,42 +193,28 @@ def extract_embeddings(model, tokenizer, tokens: list, device: str,
             batch_end = min(batch_start + batch_size, total)
             batch_tokens = tokens[batch_start:batch_end]
 
-            # nomic-embed-code requires search_query or search_document prefix
-            # For single tokens, we use the token as-is (query mode)
-            texts = [f"search_query: {t}" for t in batch_tokens]
+            # bge-m3: no instruction prefix needed (unlike nomic-embed-code)
+            texts = list(batch_tokens)
 
             encoded = tokenizer(
                 texts,
                 padding=True,
                 truncation=True,
-                max_length=64,
+                max_length=512,
                 return_tensors="pt"
             ).to(device)
 
             outputs = model(**encoded)
 
-            # Mean pooling over non-padding tokens
-            attention_mask = encoded["attention_mask"]
-            token_embeddings = outputs.last_hidden_state
-            input_mask_expanded = (
-                attention_mask.unsqueeze(-1)
-                .expand(token_embeddings.size())
-                .float()
-            )
-            sum_embeddings = torch.sum(
-                token_embeddings * input_mask_expanded, dim=1
-            )
-            sum_mask = torch.clamp(input_mask_expanded.sum(dim=1), min=1e-9)
-            mean_pooled = sum_embeddings / sum_mask
-
-            # Truncate to OUTPUT_DIM if model outputs more (Matryoshka)
-            if mean_pooled.shape[1] > OUTPUT_DIM:
-                mean_pooled = mean_pooled[:, :OUTPUT_DIM]
+            # bge-m3 uses CLS token pooling, NOT mean pooling.
+            # last_hidden_state[:, 0] = CLS; other positions = ColBERT embeddings.
+            # Using mean pooling here causes significant accuracy degradation.
+            cls_embeddings = outputs.last_hidden_state[:, 0]
 
             # L2 normalize
-            mean_pooled = torch.nn.functional.normalize(mean_pooled, p=2, dim=1)
+            cls_embeddings = torch.nn.functional.normalize(cls_embeddings, p=2, dim=1)
 
-            vecs = mean_pooled.cpu().numpy()
+            vecs = cls_embeddings.cpu().numpy()
             all_vecs.extend(vecs)
 
             # Progress
@@ -355,8 +343,8 @@ _PRETRAINED_VECTOR_BLOB_LEN:
 
 def main():
     parser = argparse.ArgumentParser(description="Extract nomic-embed-code token embeddings")
-    parser.add_argument("--output-dir", default="vendored/nomic",
-                        help="Output directory (default: vendored/nomic)")
+    parser.add_argument("--output-dir", default="vendored/bge_m3",
+                        help="Output directory (default: vendored/bge_m3)")
     parser.add_argument("--device", default=None,
                         help="Device: cuda, mps, cpu (auto-detected)")
     parser.add_argument("--skip-attention", action="store_true",
@@ -402,7 +390,7 @@ def main():
     model = AutoModel.from_pretrained(
         MODEL_NAME,
         trust_remote_code=True,
-        dtype=torch.float16,             # 7B×2B = ~14GB (vs 28GB float32)
+        dtype=torch.float16,             # ~570M×2B = ~1.1GB (vs ~2.2GB float32)
         low_cpu_mem_usage=True,          # Stream weights, no 2x peak during load
     )
     model = model.to(device)
@@ -496,7 +484,7 @@ def main():
     write_tokens_txt(str(out_dir / "code_tokens.txt"), filtered_tokens)
     write_tokens_h(str(out_dir / "code_tokens.h"), filtered_tokens)
 
-    incbin_path = f"vendored/nomic/code_vectors.bin"
+    incbin_path = f"vendored/bge_m3/code_vectors.bin"
     write_vectors_h(str(out_dir / "code_vectors.h"), len(filtered_tokens), dim, incbin_path)
     write_blob_s(str(out_dir / "code_vectors_blob.S"), incbin_path)
     print()

@@ -4957,7 +4957,7 @@ void cbm_store_free_vector_results(cbm_vector_result_t *results, int count) {
  * vector, then combine using min(cosine_k) across keywords.  This ensures
  * ALL keywords must be relevant, not just the average. */
 enum {
-    VS_VEC_DIM = 768,
+    VS_VEC_DIM = 1024,
     VS_SPARSE_NNZE = 8,
     VS_RI_SEED = 0x52494E44,
     VS_MAX_KW = 32,
