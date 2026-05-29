@@ -14,6 +14,7 @@
  * HTTP UI server (optional) runs in a background thread on localhost.
  */
 #include "mcp/mcp.h"
+#include "mcp/mcp_http.h"
 #include "watcher/watcher.h"
 #include "pipeline/pipeline.h"
 #include "store/store.h"
@@ -22,11 +23,15 @@
 #include "foundation/constants.h"
 
 enum {
-    MAIN_MIN_ARGC = 1,
-    MAIN_CLI_ARGC = 2,
-    MAIN_FLAG_OFF = 5, /* strlen("--ui=") */
-    MAIN_PORT_OFF = 7, /* strlen("--port=") */
-    MAIN_MAX_PORT = 65536,
+    MAIN_MIN_ARGC         = 1,
+    MAIN_CLI_ARGC         = 2,
+    MAIN_FLAG_OFF         = 5,  /* strlen("--ui=")           */
+    MAIN_PORT_OFF         = 7,  /* strlen("--port=")          */
+    MAIN_MCP_HTTP_OFF     = 11, /* strlen("--mcp-http=")      */
+    MAIN_MCP_PORT_OFF     = 16, /* strlen("--mcp-http-port=") */
+    MAIN_MCP_LOCAL_OFF    = 17, /* strlen("--mcp-http-local=")*/
+    MAIN_MCP_PATH_OFF     = 16, /* strlen("--mcp-http-path=") */
+    MAIN_MAX_PORT         = 65536,
 };
 #define MAIN_RAM_FRACTION 0.5
 
@@ -54,9 +59,10 @@ enum {
 
 /* ── Globals for signal handling ────────────────────────────────── */
 
-static cbm_watcher_t *g_watcher = NULL;
-static cbm_mcp_server_t *g_server = NULL;
-static cbm_http_server_t *g_http_server = NULL;
+static cbm_watcher_t          *g_watcher     = NULL;
+static cbm_mcp_server_t       *g_server      = NULL;
+static cbm_http_server_t      *g_http_server = NULL;
+static cbm_mcp_http_server_t  *g_mcp_http    = NULL;
 static atomic_int g_shutdown = 0;
 
 static void signal_handler(int sig) {
@@ -79,6 +85,9 @@ static void signal_handler(int sig) {
     if (g_http_server) {
         cbm_http_server_stop(g_http_server);
     }
+    if (g_mcp_http) {
+        cbm_mcp_http_server_stop(g_mcp_http);
+    }
     /* Close stdin to unblock getline in the MCP server loop */
     (void)fclose(stdin);
 }
@@ -98,6 +107,14 @@ static void *watcher_thread(void *arg) {
 static void *http_thread(void *arg) {
     cbm_http_server_t *srv = arg;
     cbm_http_server_run(srv);
+    return NULL;
+}
+
+/* ── MCP HTTP transport background thread ───────────────────────── */
+
+static void *mcp_http_thread(void *arg) {
+    cbm_mcp_http_server_t *srv = arg;
+    cbm_mcp_http_server_run(srv);
     return NULL;
 }
 
@@ -248,6 +265,13 @@ static void print_help(void) {
     printf("  --ui=true    Enable HTTP graph visualization (persisted)\n");
     printf("  --ui=false   Disable HTTP graph visualization (persisted)\n");
     printf("  --port=N     Set UI port (default 9749, persisted)\n");
+    printf("\nMCP HTTP transport options:\n");
+    printf("  --mcp-http=true          Enable MCP Streamable HTTP transport (persisted)\n");
+    printf("  --mcp-http=false         Disable MCP HTTP transport (persisted)\n");
+    printf("  --mcp-http-port=N        Set MCP HTTP port (default 9748, persisted)\n");
+    printf("  --mcp-http-local=true    Bind to 127.0.0.1 only (default, persisted)\n");
+    printf("  --mcp-http-local=false   Bind to 0.0.0.0 for remote access (persisted)\n");
+    printf("  --mcp-http-path=/mcp     Context path prefix (default /mcp, persisted)\n");
     printf("\nSupported agents (auto-detected):\n");
     printf("  Claude Code, Codex CLI, Gemini CLI, Zed, OpenCode,\n");
     printf("  Antigravity, Aider, KiloCode, Kiro\n");
@@ -301,7 +325,8 @@ static int handle_subcommand(int argc, char **argv) {
     return CBM_NOT_FOUND;
 }
 
-/* Parse --ui= and --port= flags. Returns true if config was modified. */
+/* Parse --ui=, --port=, --mcp-http=, --mcp-http-port=, --mcp-http-local= flags.
+ * Returns true if config was modified. */
 static bool parse_ui_flags(int argc, char **argv, cbm_ui_config_t *cfg) {
     bool changed = false;
     for (int i = SKIP_ONE; i < argc; i++) {
@@ -313,6 +338,30 @@ static bool parse_ui_flags(int argc, char **argv, cbm_ui_config_t *cfg) {
             int p = (int)strtol(argv[i] + MAIN_PORT_OFF, NULL, CBM_DECIMAL_BASE);
             if (p > 0 && p < MAIN_MAX_PORT) {
                 cfg->ui_port = p;
+                changed = true;
+            }
+        }
+        if (strncmp(argv[i], "--mcp-http=", SLEN("--mcp-http=")) == 0) {
+            cfg->mcp_http_enabled =
+                (strcmp(argv[i] + MAIN_MCP_HTTP_OFF, "true") == 0);
+            changed = true;
+        }
+        if (strncmp(argv[i], "--mcp-http-port=", SLEN("--mcp-http-port=")) == 0) {
+            int p = (int)strtol(argv[i] + MAIN_MCP_PORT_OFF, NULL, CBM_DECIMAL_BASE);
+            if (p > 0 && p < MAIN_MAX_PORT) {
+                cfg->mcp_http_port = p;
+                changed = true;
+            }
+        }
+        if (strncmp(argv[i], "--mcp-http-local=", SLEN("--mcp-http-local=")) == 0) {
+            cfg->mcp_http_local_only =
+                (strcmp(argv[i] + MAIN_MCP_LOCAL_OFF, "true") == 0);
+            changed = true;
+        }
+        if (strncmp(argv[i], "--mcp-http-path=", SLEN("--mcp-http-path=")) == 0) {
+            const char *p = argv[i] + MAIN_MCP_PATH_OFF;
+            if (p[0] == '/') {
+                snprintf(cfg->mcp_http_path, sizeof(cfg->mcp_http_path), "%s", p);
                 changed = true;
             }
         }
@@ -412,6 +461,21 @@ int main(int argc, char **argv) {
         cbm_log_warn("ui.no_assets", "hint", "rebuild with: make -f Makefile.cbm cbm-with-ui");
     }
 
+    /* Optionally start MCP Streamable HTTP transport in background thread */
+    cbm_thread_t mcp_http_tid;
+    bool mcp_http_started = false;
+
+    if (ui_cfg.mcp_http_enabled) {
+        g_mcp_http = cbm_mcp_http_server_new(ui_cfg.mcp_http_port,
+                                              ui_cfg.mcp_http_local_only,
+                                              ui_cfg.mcp_http_path);
+        if (g_mcp_http) {
+            if (cbm_thread_create(&mcp_http_tid, 0, mcp_http_thread, g_mcp_http) == 0) {
+                mcp_http_started = true;
+            }
+        }
+    }
+
     /* Run MCP event loop (blocks until EOF or signal) */
     int rc = cbm_mcp_server_run(g_server, stdin, stdout);
 
@@ -423,6 +487,13 @@ int main(int argc, char **argv) {
         cbm_thread_join(&http_tid);
         cbm_http_server_free(g_http_server);
         g_http_server = NULL;
+    }
+
+    if (mcp_http_started) {
+        cbm_mcp_http_server_stop(g_mcp_http);
+        cbm_thread_join(&mcp_http_tid);
+        cbm_mcp_http_server_free(g_mcp_http);
+        g_mcp_http = NULL;
     }
 
     if (watcher_started) {

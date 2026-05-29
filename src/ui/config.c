@@ -31,8 +31,12 @@ void cbm_ui_config_path(char *buf, int bufsz) {
 /* ── Load ────────────────────────────────────────────────────── */
 
 void cbm_ui_config_load(cbm_ui_config_t *cfg) {
-    cfg->ui_enabled = CBM_UI_DEFAULT_ENABLED;
-    cfg->ui_port = CBM_UI_DEFAULT_PORT;
+    cfg->ui_enabled        = CBM_UI_DEFAULT_ENABLED;
+    cfg->ui_port           = CBM_UI_DEFAULT_PORT;
+    cfg->mcp_http_enabled    = CBM_MCP_HTTP_DEFAULT_ENABLED;
+    cfg->mcp_http_port       = CBM_MCP_HTTP_DEFAULT_PORT;
+    cfg->mcp_http_local_only = true;
+    snprintf(cfg->mcp_http_path, sizeof(cfg->mcp_http_path), "%s", CBM_MCP_HTTP_DEFAULT_PATH);
 
     char path[CBM_SZ_1K];
     cbm_ui_config_path(path, (int)sizeof(path));
@@ -88,6 +92,27 @@ void cbm_ui_config_load(cbm_ui_config_t *cfg) {
         cfg->ui_port = (int)yyjson_get_int(v_port);
     }
 
+    yyjson_val *v_mcp_en = yyjson_obj_get(root, "mcp_http_enabled");
+    if (yyjson_is_bool(v_mcp_en)) {
+        cfg->mcp_http_enabled = yyjson_get_bool(v_mcp_en);
+    }
+
+    yyjson_val *v_mcp_port = yyjson_obj_get(root, "mcp_http_port");
+    if (yyjson_is_int(v_mcp_port)) {
+        cfg->mcp_http_port = (int)yyjson_get_int(v_mcp_port);
+    }
+
+    yyjson_val *v_mcp_local = yyjson_obj_get(root, "mcp_http_local_only");
+    if (yyjson_is_bool(v_mcp_local)) {
+        cfg->mcp_http_local_only = yyjson_get_bool(v_mcp_local);
+    }
+
+    yyjson_val *v_mcp_path = yyjson_obj_get(root, "mcp_http_path");
+    if (yyjson_is_str(v_mcp_path)) {
+        snprintf(cfg->mcp_http_path, sizeof(cfg->mcp_http_path),
+                 "%s", yyjson_get_str(v_mcp_path));
+    }
+
     yyjson_doc_free(doc);
 }
 
@@ -110,8 +135,12 @@ void cbm_ui_config_save(const cbm_ui_config_t *cfg) {
     yyjson_mut_val *root = yyjson_mut_obj(doc);
     yyjson_mut_doc_set_root(doc, root);
 
-    yyjson_mut_obj_add_bool(doc, root, "ui_enabled", cfg->ui_enabled);
-    yyjson_mut_obj_add_int(doc, root, "ui_port", cfg->ui_port);
+    yyjson_mut_obj_add_bool(doc, root, "ui_enabled",         cfg->ui_enabled);
+    yyjson_mut_obj_add_int(doc,  root, "ui_port",            cfg->ui_port);
+    yyjson_mut_obj_add_bool(doc, root, "mcp_http_enabled",   cfg->mcp_http_enabled);
+    yyjson_mut_obj_add_int(doc,  root, "mcp_http_port",      cfg->mcp_http_port);
+    yyjson_mut_obj_add_bool(doc,    root, "mcp_http_local_only", cfg->mcp_http_local_only);
+    yyjson_mut_obj_add_strcpy(doc, root, "mcp_http_path",       cfg->mcp_http_path);
 
     size_t json_len = 0;
     char *json = yyjson_mut_write(doc, YYJSON_WRITE_PRETTY, &json_len);
