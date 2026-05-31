@@ -145,6 +145,8 @@ static const ext_entry_t EXT_TABLE[] = {
     /* JavaScript */
     {".js", CBM_LANG_JAVASCRIPT},
     {".jsx", CBM_LANG_JAVASCRIPT},
+    {".mjs", CBM_LANG_JAVASCRIPT}, /* ES modules (#197) */
+    {".cjs", CBM_LANG_JAVASCRIPT}, /* CommonJS modules */
 
     /* JSON */
     {".json", CBM_LANG_JSON},
@@ -241,6 +243,8 @@ static const ext_entry_t EXT_TABLE[] = {
 
     /* TypeScript */
     {".ts", CBM_LANG_TYPESCRIPT},
+    {".mts", CBM_LANG_TYPESCRIPT}, /* TS ES modules */
+    {".cts", CBM_LANG_TYPESCRIPT}, /* TS CommonJS modules */
 
     /* VimScript */
     {".vim", CBM_LANG_VIMSCRIPT},
