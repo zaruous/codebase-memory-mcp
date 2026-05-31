@@ -206,17 +206,29 @@ static char *filter_tools_list(char *response) {
         return response;
     }
 
-    /* Build a new array without blocked tools */
-    yyjson_mut_val *filtered = yyjson_mut_arr(mdoc);
-    size_t idx = 0, max = yyjson_mut_arr_size(mtools);
-    yyjson_mut_val *tool;
-    yyjson_mut_arr_foreach(mtools, idx, max, tool) {
-        yyjson_mut_val *v_name = yyjson_mut_obj_get(tool, "name");
-        if (!v_name) continue;
-        const char *name = yyjson_mut_get_str(v_name);
-        if (!tool_is_blocked(name)) {
-            yyjson_mut_arr_append(filtered, tool);
+    /* Build a new array without blocked tools.
+     * Two-pass approach: collect allowed tool pointers first (no next-pointer
+     * mutation during iteration), then append them.  A single-pass
+     * yyjson_mut_arr_append(filtered, tool) inside foreach corrupts the
+     * iterator because append overwrites tool->next, causing the loop to
+     * revisit the same element on every subsequent step. */
+    yyjson_mut_val *allowed[32];
+    int allowed_n = 0;
+    {
+        size_t idx = 0, max = yyjson_mut_arr_size(mtools);
+        yyjson_mut_val *tool;
+        yyjson_mut_arr_foreach(mtools, idx, max, tool) {
+            yyjson_mut_val *v_name = yyjson_mut_obj_get(tool, "name");
+            if (!v_name) continue;
+            const char *name = yyjson_mut_get_str(v_name);
+            if (!tool_is_blocked(name) && allowed_n < (int)(sizeof(allowed) / sizeof(allowed[0]))) {
+                allowed[allowed_n++] = tool;
+            }
         }
+    }
+    yyjson_mut_val *filtered = yyjson_mut_arr(mdoc);
+    for (int i = 0; i < allowed_n; i++) {
+        yyjson_mut_arr_append(filtered, allowed[i]);
     }
     yyjson_mut_obj_put(mresult, yyjson_mut_strcpy(mdoc, "tools"), filtered);
 
