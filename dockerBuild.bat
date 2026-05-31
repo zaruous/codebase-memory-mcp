@@ -6,13 +6,13 @@ rem ═════════════════════════�
 rem  codebase-memory-mcp Docker 이미지 빌드
 rem
 rem  사용법:
-rem    dockerBuild.bat              기본 버전(0.6.1)으로 빌드
-rem    dockerBuild.bat 0.6.1        버전 지정 빌드
+rem    dockerBuild.bat              기본 버전(0.10.1)으로 빌드
+rem    dockerBuild.bat 0.10.1       버전 지정 빌드
 rem ═══════════════════════════════════════════════════════════════════════════
 
 set IMAGE=codebase-memory-mcp
 set VERSION=%~1
-if "%VERSION%"=="" set VERSION=0.10.0
+if "%VERSION%"=="" set VERSION=0.10.1
 
 echo [빌드] %IMAGE%:%VERSION% 빌드 시작...
 echo.
