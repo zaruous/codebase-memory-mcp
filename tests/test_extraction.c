@@ -2260,6 +2260,70 @@ TEST(python_regular_module_qn_unchanged) {
     PASS();
 }
 
+/* Find a definition by name; returns the item or NULL. */
+static const CBMDefinition *find_def_by_name(CBMFileResult *r, const char *name) {
+    for (int i = 0; i < r->defs.count; i++) {
+        if (r->defs.items[i].name && strcmp(r->defs.items[i].name, name) == 0) {
+            return &r->defs.items[i];
+        }
+    }
+    return NULL;
+}
+
+static int decorators_contain(const CBMDefinition *d, const char *needle) {
+    if (!d || !d->decorators) {
+        return 0;
+    }
+    for (int i = 0; d->decorators[i]; i++) {
+        if (strstr(d->decorators[i], needle)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Issue #382: Java Method nodes had empty decorators / signature. */
+TEST(extract_java_method_annotations_issue382) {
+    CBMFileResult *r = extract("public class C {\n"
+                               "  @GetMapping(\"/x\")\n"
+                               "  public String cmd(String c) { return c; }\n"
+                               "}\n",
+                               CBM_LANG_JAVA, "t", "C.java");
+    ASSERT_NOT_NULL(r);
+    ASSERT_FALSE(r->has_error);
+    const CBMDefinition *m = find_def_by_name(r, "cmd");
+    ASSERT_NOT_NULL(m);
+    ASSERT(decorators_contain(m, "GetMapping"));
+    ASSERT_NOT_NULL(m->signature);
+    ASSERT(m->signature[0] != '\0');
+    cbm_free_result(r);
+    PASS();
+}
+
+
+/* Issue #213: large TS files were indexed as a File node with zero children. */
+TEST(extract_large_ts_has_functions_issue213) {
+    enum { NFUNCS = 4000 };
+    size_t cap = (size_t)NFUNCS * 80 + 64;
+    char *src = (char *)malloc(cap);
+    ASSERT_NOT_NULL(src);
+    size_t off = 0;
+    for (int i = 0; i < NFUNCS; i++) {
+        off += (size_t)snprintf(src + off, cap - off,
+                                "export function fn%d(a: number): number { return a + %d; }\n", i,
+                                i);
+    }
+    CBMFileResult *r =
+        cbm_extract_file(src, (int)off, CBM_LANG_TYPESCRIPT, "t", "big.ts", 0, NULL, NULL);
+    ASSERT_NOT_NULL(r);
+    int fns = count_defs_with_label(r, "Function");
+    ASSERT_GT(fns, 0); /* must not silently produce zero children */
+    cbm_free_result(r);
+    free(src);
+    PASS();
+}
+
+
 /* ═══════════════════════════════════════════════════════════════════
  * Suite
  * ═══════════════════════════════════════════════════════════════════ */
@@ -2462,6 +2526,8 @@ SUITE(extraction) {
     RUN_TEST(python_init_nested_module_qn);
     RUN_TEST(js_index_module_qn_not_collide_with_folder);
     RUN_TEST(python_regular_module_qn_unchanged);
+    RUN_TEST(extract_java_method_annotations_issue382);
+    RUN_TEST(extract_large_ts_has_functions_issue213);
 
     cbm_shutdown();
 }

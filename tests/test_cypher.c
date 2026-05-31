@@ -1035,8 +1035,8 @@ TEST(cypher_bare_edge_return_exposes_properties_json) {
     cbm_store_t *s = setup_cypher_multi_edge_store();
     cbm_cypher_result_t r = {0};
 
-    int rc = cbm_cypher_execute(
-        s, "MATCH (a)-[r:HTTP_CALLS]->(b) WHERE r.method = 'POST' RETURN r", "testproj", 0, &r);
+    int rc = cbm_cypher_execute(s, "MATCH (a)-[r:HTTP_CALLS]->(b) WHERE r.method = 'POST' RETURN r",
+                                "testproj", 0, &r);
     ASSERT_EQ(rc, 0);
     ASSERT_EQ(r.row_count, 1);
     const char *r_val = cypher_get_col(&r, 0, "r");
@@ -2106,6 +2106,62 @@ TEST(cypher_parse_unwind_var) {
     PASS();
 }
 
+/* ── Issue #389 group: Cypher feature reproductions ─────────────────
+ * Each asserts the CORRECT behavior; a failure reproduces the bug. */
+
+/* #240: labels() function */
+TEST(cypher_issue240_labels_function) {
+    cbm_store_t *s = setup_cypher_store();
+    cbm_cypher_result_t r = {0};
+    int rc = cbm_cypher_execute(s, "MATCH (n:Module) RETURN labels(n) AS lbl", "test", 0, &r);
+    ASSERT_EQ(rc, 0);
+    ASSERT_NULL(r.error);
+    ASSERT_EQ(r.row_count, 1);
+    cbm_cypher_result_free(&r);
+    cbm_store_close(s);
+    PASS();
+}
+
+/* #237: DISTINCT applied before ORDER BY + LIMIT */
+TEST(cypher_issue237_distinct_order_limit) {
+    cbm_store_t *s = setup_cypher_store();
+    cbm_cypher_result_t r = {0};
+    int rc = cbm_cypher_execute(
+        s, "MATCH (f:Function) RETURN DISTINCT f.label AS l ORDER BY l LIMIT 10", "test", 0, &r);
+    ASSERT_EQ(rc, 0);
+    ASSERT_NULL(r.error);
+    ASSERT_EQ(r.row_count, 1);
+    cbm_cypher_result_free(&r);
+    cbm_store_close(s);
+    PASS();
+}
+
+/* #252: toInteger() */
+TEST(cypher_issue252_tointeger) {
+    cbm_store_t *s = setup_cypher_store();
+    cbm_cypher_result_t r = {0};
+    int rc = cbm_cypher_execute(s, "MATCH (f:Function) RETURN toInteger(f.start_line) AS ln",
+                                "test", 0, &r);
+    ASSERT_EQ(rc, 0);
+    ASSERT_NULL(r.error);
+    cbm_cypher_result_free(&r);
+    cbm_store_close(s);
+    PASS();
+}
+
+/* #305: count(*) + AS alias */
+TEST(cypher_issue305_count_star_alias) {
+    cbm_store_t *s = setup_cypher_store();
+    cbm_cypher_result_t r = {0};
+    int rc = cbm_cypher_execute(s, "MATCH (n) RETURN count(*) AS total", "test", 0, &r);
+    ASSERT_EQ(rc, 0);
+    ASSERT_NULL(r.error);
+    ASSERT_EQ(r.row_count, 1);
+    cbm_cypher_result_free(&r);
+    cbm_store_close(s);
+    PASS();
+}
+
 /* ══════════════════════════════════════════════════════════════════ */
 
 SUITE(cypher) {
@@ -2139,6 +2195,10 @@ SUITE(cypher) {
     RUN_TEST(cypher_parse_error);
     /* Execution */
     RUN_TEST(cypher_exec_match_all_functions);
+    RUN_TEST(cypher_issue240_labels_function);
+    RUN_TEST(cypher_issue237_distinct_order_limit);
+    RUN_TEST(cypher_issue252_tointeger);
+    RUN_TEST(cypher_issue305_count_star_alias);
     RUN_TEST(cypher_exec_where_eq);
     RUN_TEST(cypher_exec_where_regex);
     RUN_TEST(cypher_exec_where_contains);

@@ -594,6 +594,11 @@ static void merge_pkg_entries(cbm_pipeline_ctx_t *ctx, cbm_pkg_entries_t *pkg_en
     if (!pkg_entries) {
         return;
     }
+    /* Supplement with a repo-wide filesystem walk so manifests filtered
+     * by the main discoverer (package.json, composer.json — in
+     * IGNORED_JSON_FILES) still feed pkgmap. Append into worker 0's
+     * array so the existing merge below sees them. */
+    cbm_pkgmap_scan_repo(ctx->repo_path, &pkg_entries[0]);
     cbm_pipeline_set_pkgmap(cbm_pkgmap_build(pkg_entries, worker_count, ctx->project_name));
     for (int i = 0; i < worker_count; i++) {
         cbm_pkg_entries_free(&pkg_entries[i]);
@@ -2128,6 +2133,12 @@ static void resolve_worker(int worker_id, void *ctx_ptr) {
                     }
                 }
                 free(filtered);
+                /* Contract: cbm_slab_reclaim() requires the thread parser to be
+                 * destroyed first; otherwise its lexer holds slab pointers
+                 * (lexer.included_ranges) that get freed underneath it, causing
+                 * a heap-use-after-free on the next ts_lexer_goto. The next
+                 * cbm_extract_file on this thread will recreate the parser. */
+                cbm_destroy_thread_parser();
                 cbm_slab_reclaim();
                 uint64_t lsp_elapsed_ns = extract_now_ns() - lsp_t0;
                 atomic_fetch_add_explicit(&rc->time_ns_cross_lsp, lsp_elapsed_ns,
