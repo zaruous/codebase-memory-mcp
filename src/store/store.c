@@ -677,13 +677,17 @@ bool cbm_store_check_integrity(cbm_store_t *s) {
     sqlite3_finalize(stmt);
 
     if (ok) {
-        /* Check that root_path in projects table starts with '/' or a drive letter.
-         * Corrupt DBs often have numeric strings like "826" in root_path. */
+        /* Check that root_path in projects table starts with '/' or a drive
+         * letter. Corrupt DBs often have numeric strings like "826" in
+         * root_path. Drive letters may be upper- OR lower-case on Windows
+         * (e.g. "c:/repo", "y:/share") — rejecting lowercase here flagged
+         * valid Windows paths as corrupt and deleted the DB (#227/#367). */
         rc = sqlite3_prepare_v2(
             s->db,
             "SELECT root_path FROM projects WHERE root_path != '' "
             "AND NOT (substr(root_path, 1, 1) = '/' "
-            "OR (substr(root_path, 1, 1) BETWEEN 'A' AND 'Z')) LIMIT 1;",
+            "OR (substr(root_path, 1, 1) BETWEEN 'A' AND 'Z') "
+            "OR (substr(root_path, 1, 1) BETWEEN 'a' AND 'z')) LIMIT 1;",
             CBM_NOT_FOUND, &stmt, NULL);
         if (rc == SQLITE_OK) {
             if (sqlite3_step(stmt) == SQLITE_ROW) {
