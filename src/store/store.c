@@ -2355,6 +2355,22 @@ static int search_where_basic(const cbm_search_params_t *params, char *where, in
     }
     if (params->file_pattern) {
         char *lp = cbm_glob_to_like(params->file_pattern);
+        /* A file_pattern with no glob wildcards is treated as a path-substring
+         * match (issue #200): file_pattern="offer-server" should match
+         * "src/offer-server/x.js", not only a path equal to "offer-server".
+         * Patterns that DO contain * / ? keep their explicit glob semantics. */
+        if (lp && !strchr(params->file_pattern, '*') && !strchr(params->file_pattern, '?')) {
+            size_t lplen = strlen(lp);
+            char *contains = malloc(lplen + 3);
+            if (contains) {
+                contains[0] = '%';
+                memcpy(contains + 1, lp, lplen);
+                contains[lplen + 1] = '%';
+                contains[lplen + 2] = '\0';
+                free(lp);
+                lp = contains;
+            }
+        }
         int pool_was_full = (pool->count >= ST_LIKE_POOL_MAX);
         like_pool_add(pool, lp);
         if (!pool_was_full && lp) {
