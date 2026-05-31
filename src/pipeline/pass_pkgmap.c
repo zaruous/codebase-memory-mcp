@@ -26,6 +26,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifndef _WIN32
+#include <dirent.h>
+#include <sys/stat.h>
+#endif
 
 /* Read an entire file into a malloc'd buffer. Returns NULL on failure. */
 static char *pkgmap_read_file(const char *path, int *out_len) {
