@@ -12,7 +12,7 @@ rem ═════════════════════════�
 
 set IMAGE=codebase-memory-mcp
 set VERSION=%~1
-if "%VERSION%"=="" set VERSION=0.6.1
+if "%VERSION%"=="" set VERSION=0.10.0
 
 echo [빌드] %IMAGE%:%VERSION% 빌드 시작...
 echo.
