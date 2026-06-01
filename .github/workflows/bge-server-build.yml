@@ -1,0 +1,127 @@
+name: BGE Server — Build & Test
+
+on:
+  push:
+    paths:
+      - 'bge-server/**'
+    branches: [main, 'claude/**']
+  pull_request:
+    paths:
+      - 'bge-server/**'
+
+jobs:
+  test:
+    name: Unit tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.11"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install CPU torch first (fast, avoids CUDA download)
+        run: |
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+        working-directory: bge-server
+
+      - name: Install dev dependencies
+        run: pip install -r requirements-dev.txt
+        working-directory: bge-server
+
+      - name: Run tests
+        run: pytest tests/ -v
+        working-directory: bge-server
+
+  build-linux:
+    name: Build Linux exe
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Build
+        run: |
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements-dev.txt
+          pyinstaller bge_server.spec --clean --noconfirm
+        working-directory: bge-server
+
+      - name: Smoke test exe
+        run: |
+          ./dist/bge-server/bge-server --help
+        working-directory: bge-server
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bge-server-linux
+          path: bge-server/dist/bge-server/
+          retention-days: 30
+
+  build-windows:
+    name: Build Windows exe
+    needs: test
+    runs-on: windows-latest
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Build
+        run: |
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements-dev.txt
+          pyinstaller bge_server.spec --clean --noconfirm
+        working-directory: bge-server
+        shell: cmd
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bge-server-windows
+          path: bge-server/dist/bge-server/
+          retention-days: 30
+
+  build-macos:
+    name: Build macOS exe
+    needs: test
+    runs-on: macos-latest
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Build
+        run: |
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements-dev.txt
+          pyinstaller bge_server.spec --clean --noconfirm
+        working-directory: bge-server
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bge-server-macos
+          path: bge-server/dist/bge-server/
+          retention-days: 30
