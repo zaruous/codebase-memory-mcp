@@ -372,6 +372,7 @@ static const ext_entry_t EXT_TABLE[] = {
 
     /* Go Template */
     {".gotmpl", CBM_LANG_GOTEMPLATE},
+    {".tpl", CBM_LANG_GOTEMPLATE}, /* Helm _helpers.tpl named-template definitions */
 
     /* Hare */
     {".ha", CBM_LANG_HARE},
@@ -429,6 +430,13 @@ static const ext_entry_t EXT_TABLE[] = {
 
     /* Luau */
     {".luau", CBM_LANG_LUAU},
+
+    /* Qt QML */
+    {".qml", CBM_LANG_QML},
+
+    /* CFML / ColdFusion — .cfc components are script-dialect; .cfm are tag templates */
+    {".cfc", CBM_LANG_CFSCRIPT},
+    {".cfm", CBM_LANG_CFML},
 
     /* Mermaid */
     {".mermaid", CBM_LANG_MERMAID},
@@ -749,6 +757,9 @@ static const char *LANG_NAMES[CBM_LANG_COUNT] = {
     [CBM_LANG_HARE] = "Hare",
     [CBM_LANG_PONY] = "Pony",
     [CBM_LANG_LUAU] = "Luau",
+    [CBM_LANG_QML] = "QML",
+    [CBM_LANG_CFSCRIPT] = "CFML",
+    [CBM_LANG_CFML] = "CFML",
     [CBM_LANG_JANET] = "Janet",
     [CBM_LANG_SWAY] = "Sway",
     [CBM_LANG_NASM] = "NASM",
@@ -860,17 +871,31 @@ CBMLanguage cbm_language_for_filename(const char *filename) {
         return CBM_LANG_COUNT;
     }
 
-    /* Probe user config for compound extensions (e.g. ".blade.php"). */
+    /* Probe compound extensions (e.g. ".blade.php") from the first dot toward
+     * the last. Built-in compounds are checked first so e.g. Laravel Blade
+     * templates map to Blade rather than the single-extension fallback (PHP);
+     * user config can still add more (#258). */
+    static const struct {
+        const char *ext;
+        CBMLanguage lang;
+    } COMPOUND_EXT_TABLE[] = {
+        {".blade.php", CBM_LANG_BLADE},
+    };
     const cbm_userconfig_t *ucfg = cbm_get_user_lang_config();
-    if (ucfg) {
-        const char *p = strchr(filename, '.');
-        while (p && p < last_dot) {
+    const char *p = strchr(filename, '.');
+    while (p && p < last_dot) {
+        for (size_t i = 0; i < sizeof(COMPOUND_EXT_TABLE) / sizeof(COMPOUND_EXT_TABLE[0]); i++) {
+            if (strcmp(p, COMPOUND_EXT_TABLE[i].ext) == 0) {
+                return COMPOUND_EXT_TABLE[i].lang;
+            }
+        }
+        if (ucfg) {
             CBMLanguage lang = cbm_userconfig_lookup(ucfg, p);
             if (lang != CBM_LANG_COUNT) {
                 return lang;
             }
-            p = strchr(p + SKIP_ONE, '.');
         }
+        p = strchr(p + SKIP_ONE, '.');
     }
 
     /* Standard single-extension lookup (built-ins + user overrides). */

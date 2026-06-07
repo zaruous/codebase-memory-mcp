@@ -50,3 +50,4 @@ URL:https://github.com/DeusData/codebase-memory-mcp/releases/latest/download:bin
 URL:https://github.com/DeusData/codebase-memory-mcp/releases/latest:version check via redirect header
 URL:http://127.0.0.1:UI server binding (localhost only)
 URL:https://www.sqlite.org/c3ref/c_checkpoint_full.html:sqlite WAL checkpoint API doc reference (comment only, not a network call)
+URL:https://github.com/DeusData/codebase-memory-mcp:project repository self-reference in update/star notice (src/mcp/mcp.c)

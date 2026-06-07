@@ -167,6 +167,9 @@ typedef enum {
     CBM_LANG_KUSTOMIZE, // kustomization.yaml — Kubernetes overlay tool
     CBM_LANG_K8S,       // Generic Kubernetes manifest (apiVersion: detected)
     CBM_LANG_PINE,      // Pine Script (TradingView indicator / strategy language)
+    CBM_LANG_QML,       // Qt QML (Qt Modeling Language — declarative UI + embedded JS)
+    CBM_LANG_CFSCRIPT,  // CFML script dialect (.cfc components — Lucee/ColdFusion)
+    CBM_LANG_CFML,      // CFML tag dialect (.cfm templates — Lucee/ColdFusion)
     CBM_LANG_COUNT
 } CBMLanguage;
 
@@ -192,6 +195,16 @@ typedef struct {
     const char *route_path;    // HTTP route path from decorator (e.g., "/api/users") or NULL
     const char *route_method;  // HTTP method from decorator (e.g., "POST") or NULL
     int complexity;            // cyclomatic complexity
+    int cognitive;             // cognitive complexity (nesting-weighted)
+    int loop_count;            // number of loop constructs in the body
+    int loop_depth;            // max nested-loop depth (bottleneck proxy)
+    bool is_recursive;         // body contains a direct self-call (seed for "recursive")
+    int param_count;           // number of parameters (large = complexity smell)
+    int max_access_depth;      // deepest chained member/subscript access (a.b.c.d)
+    int linear_scan_in_loop;   // count of linear-scan calls (find/contains/indexOf) inside loops
+    int alloc_in_loop;         // count of allocation/append calls inside loops
+    bool recursion_in_loop;    // a self-call occurs inside a loop body
+    bool unguarded_recursion;  // recursive with no self-call guarded by a conditional
     int lines;                 // body line count
     uint32_t *fingerprint;     // MinHash fingerprint (arena-allocated, K values) or NULL
     int fingerprint_k;         // number of hash values (CBM_MINHASH_K or 0)
@@ -220,6 +233,9 @@ typedef struct {
     const char *second_arg_name;        // second argument identifier (handler ref) or NULL
     CBMCallArg args[CBM_MAX_CALL_ARGS]; // first N arguments with expressions
     int arg_count;                      // number of captured arguments
+    int loop_depth;                     // enclosing loop nesting at the call site
+    int branch_depth;                   // enclosing branch nesting at the call site
+    int start_line;                     // 1-based source line of the call (for def range-match)
 } CBMCall;
 
 typedef struct {
@@ -528,6 +544,12 @@ uint64_t cbm_get_lsp_ns(void);
 uint64_t cbm_get_preprocess_ns(void);
 uint64_t cbm_get_files_preprocessed(void);
 void cbm_reset_profile(void);
+
+// Toggle C/C++ preprocessor Macro-node extraction (#375). The pipeline enables
+// it only for full/advanced index modes (it dominates extraction on macro-dense
+// codebases). Default ON. Set before extraction; read-only during.
+void cbm_set_macro_extraction(int enabled);
+int cbm_macro_extraction_enabled(void);
 
 // --- Internal helpers used by extractors ---
 

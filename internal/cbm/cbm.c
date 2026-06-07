@@ -9,6 +9,9 @@
 #include "lsp/py_lsp.h"
 #include "lsp/ts_lsp.h"
 #include "lsp/cs_lsp.h"
+#include "lsp/java_lsp.h"
+#include "lsp/kotlin_lsp.h"
+#include "lsp/rust_lsp.h"
 #include "preprocessor.h"
 #include "foundation/compat.h"
 #include "tree_sitter/api.h" // TSParser, TSNode, TSTree, TSInput, TSLanguage, TSPoint, TSParseOptions, TSParseState
@@ -16,6 +19,7 @@
 #include <stdint.h> // uint32_t, uint64_t, int64_t
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include <time.h> // struct timespec, CLOCK_MONOTONIC
 
 // Atomic counters for profiling parse vs extraction time (nanoseconds).
@@ -27,6 +31,20 @@ static _Atomic uint64_t total_lsp_ns = 0;
 static _Atomic uint64_t total_preprocess_ns = 0;
 static _Atomic uint64_t total_files_preprocessed = 0;
 static _Atomic uint64_t total_files = 0;
+
+// C/C++ preprocessor #define macros are extracted as Macro nodes (#375). On a
+// macro-dense codebase (e.g. the Linux kernel: ~2.4M macros, 49% of all nodes)
+// this is the dominant extraction cost, so it is gated to the full/advanced
+// index modes. Default ON to preserve behavior for direct callers/tests; the
+// pipeline sets it from the index mode before extraction. Set once pre-extract,
+// read-only during, so a relaxed atomic is sufficient.
+static _Atomic int g_extract_macros = 1;
+void cbm_set_macro_extraction(int enabled) {
+    atomic_store_explicit(&g_extract_macros, enabled ? 1 : 0, memory_order_relaxed);
+}
+int cbm_macro_extraction_enabled(void) {
+    return atomic_load_explicit(&g_extract_macros, memory_order_relaxed);
+}
 
 #define NSEC_PER_SEC 1000000000ULL
 #define USEC_TO_NSEC 1000ULL
@@ -251,6 +269,100 @@ void cbm_shutdown(void) {
     cbm_initialized = 0;
 }
 
+// --- Bottleneck call-name classification (language-agnostic heuristics) ---
+
+// Case-insensitive equality for short callee names.
+static bool name_ieq(const char *a, const char *b) {
+    for (; *a && *b; a++, b++) {
+        if (tolower((unsigned char)*a) != tolower((unsigned char)*b)) {
+            return false;
+        }
+    }
+    return *a == '\0' && *b == '\0';
+}
+
+static bool name_in_set(const char *name, const char *const *set) {
+    for (const char *const *s = set; *s; s++) {
+        if (name_ieq(name, *s)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Linear-scan / membership calls: a hit inside a loop is the textbook hidden
+// O(n^2) (cf. Olivo et al., PLDI'15) that syntactic loop-depth alone misses.
+static bool is_linear_scan_name(const char *n) {
+    static const char *const set[] = {"find",    "indexof",   "contains", "includes", "search",
+                                      "lookup",  "strstr",    "strchr",   "strrchr",  "memchr",
+                                      "find_if", "findindex", "count",    "index",    NULL};
+    return name_in_set(n, set);
+}
+
+// Allocation / growable-append calls: repeated inside a loop is the classic
+// accidental reallocation / string-concat O(n^2). Names are deliberately
+// conservative; meaningless in some languages → simply never matches there.
+static bool is_alloc_name(const char *n) {
+    static const char *const set[] = {"malloc",  "calloc",    "realloc",      "strdup", "strndup",
+                                      "append",  "push_back", "emplace_back", "concat", "strcat",
+                                      "strncat", "push",      "pushback",     NULL};
+    return name_in_set(n, set);
+}
+
+// Count parameters from a signature string like "(int a, Foo* b, cb (*)(int,int))".
+// Fallback for languages where param_names isn't populated (e.g. C keeps only the
+// signature text). Counts commas at the top paren level; treats "()"/"(void)" as 0.
+// Approximate by design (a structural smell, not an exact arity).
+static int count_params_from_signature(const char *sig) {
+    if (!sig) {
+        return 0;
+    }
+    const char *p = sig;
+    while (*p && *p != '(') {
+        p++;
+    }
+    if (*p != '(') {
+        return 0;
+    }
+    p++;
+    const char *list = p;
+    int depth = 0;
+    int commas = 0;
+    bool any = false;
+    for (; *p; p++) {
+        char ch = *p;
+        if (ch == '(' || ch == '[' || ch == '{' || ch == '<') {
+            depth++;
+        } else if (ch == ')') {
+            if (depth == 0) {
+                break;
+            }
+            depth--;
+        } else if (ch == ']' || ch == '}' || ch == '>') {
+            if (depth > 0) {
+                depth--;
+            }
+        } else if (ch == ',' && depth == 0) {
+            commas++;
+        } else if (!isspace((unsigned char)ch)) {
+            any = true;
+        }
+    }
+    if (!any) {
+        return 0; /* "()" */
+    }
+    if (commas == 0) {
+        while (*list == ' ' || *list == '\t') {
+            list++;
+        }
+        if (strncmp(list, "void", 4) == 0 &&
+            (list[4] == ')' || list[4] == ' ' || list[4] == '\0')) {
+            return 0; /* C "(void)" */
+        }
+    }
+    return commas + 1;
+}
+
 // --- Main extraction function ---
 
 CBMFileResult *cbm_extract_file(const char *source, int source_len, CBMLanguage language,
@@ -394,7 +506,22 @@ CBMFileResult *cbm_extract_file(const char *source, int source_len, CBMLanguage 
             cbm_run_cs_lsp(a, result, source, source_len, root);
         }
     }
+    if (language == CBM_LANG_JAVA) {
+        cbm_run_java_lsp(a, result, source, source_len, root);
+    }
+    if (language == CBM_LANG_KOTLIN) {
+        cbm_run_kotlin_lsp(a, result, source, source_len, root);
+    }
+    if (language == CBM_LANG_RUST) {
+        cbm_run_rust_lsp(a, result, source, source_len, root);
+    }
     atomic_fetch_add(&total_lsp_ns, now_ns() - lsp_start);
+
+    // Calls extracted so far all carry ORIGINAL-source line numbers; the C/C++
+    // preprocessor second pass below appends calls with EXPANDED-source lines,
+    // which must not be used for the def line-range attribution of the bottleneck
+    // metrics. Remember the boundary.
+    int orig_calls_count = result->calls.count;
 
     // Second pass: preprocess C/C++/CUDA and extract additional macro-hidden calls.
     // Defs keep original-source line numbers; only CALLS are extracted from expanded source.
@@ -456,6 +583,97 @@ CBMFileResult *cbm_extract_file(const char *source, int source_len, CBMLanguage 
         }
         atomic_fetch_add(&total_preprocess_ns, now_ns() - pp_start);
     }
+
+    // Bottleneck call-context metrics. Each call is attributed to the INNERMOST
+    // enclosing Function/Method def by source-line range (defs and calls in one
+    // CBMFileResult share the same file). Range matching is used instead of
+    // enclosing_func_qn string matching because some grammars (notably C, whose
+    // function_definition has no "name" field) attribute the call's scope to the
+    // module rather than the function — line ranges are unambiguous and
+    // language-agnostic. Bounded per file (defs x calls), not a repo-scale scan.
+    int def_count = result->defs.count;
+    bool *has_self = def_count > 0 ? calloc((size_t)def_count, sizeof(bool)) : NULL;
+    bool *has_guarded = def_count > 0 ? calloc((size_t)def_count, sizeof(bool)) : NULL;
+
+    // param_count is a standalone structural smell (independent of calls). Prefer
+    // the parsed param_names array; fall back to counting from the signature text
+    // for languages (e.g. C) that populate only the signature.
+    for (int di = 0; di < def_count; di++) {
+        CBMDefinition *d = &result->defs.items[di];
+        int pc = 0;
+        if (d->param_names) {
+            while (d->param_names[pc]) {
+                pc++;
+            }
+        }
+        if (pc == 0 && d->signature) {
+            pc = count_params_from_signature(d->signature);
+        }
+        d->param_count = pc;
+    }
+
+    for (int ci = 0; ci < orig_calls_count; ci++) {
+        const CBMCall *c = &result->calls.items[ci];
+        if (!c->callee_name || c->start_line <= 0) {
+            continue;
+        }
+        // Innermost enclosing Function/Method def by line range (smallest span).
+        int best = -1;
+        int best_span = -1;
+        for (int di = 0; di < def_count; di++) {
+            const CBMDefinition *d = &result->defs.items[di];
+            if (!d->name || !d->label ||
+                (strcmp(d->label, "Function") != 0 && strcmp(d->label, "Method") != 0)) {
+                continue;
+            }
+            if ((int)d->start_line <= c->start_line && c->start_line <= (int)d->end_line) {
+                int span = (int)d->end_line - (int)d->start_line;
+                if (best < 0 || span < best_span) {
+                    best_span = span;
+                    best = di;
+                }
+            }
+        }
+        if (best < 0) {
+            continue;
+        }
+        CBMDefinition *d = &result->defs.items[best];
+        // callee_name may be bare ("recur") or qualified ("pkg.recur", "self.recur")
+        const char *dot = strrchr(c->callee_name, '.');
+        const char *callee_short = dot ? dot + 1 : c->callee_name;
+        bool in_loop = c->loop_depth > 0;
+
+        if (strcmp(callee_short, d->name) == 0) {
+            // Direct self-recursion. The call graph omits self-edges (pass_calls
+            // skips source==target), so detect it here; seeds "recursive".
+            d->is_recursive = true;
+            if (has_self) {
+                has_self[best] = true;
+            }
+            if (in_loop) {
+                d->recursion_in_loop = true; // recursion compounded by a loop
+            }
+            if (c->branch_depth > 0 && has_guarded) {
+                has_guarded[best] = true; // a self-call guarded by some conditional
+            }
+        }
+        if (in_loop && is_linear_scan_name(callee_short)) {
+            d->linear_scan_in_loop++; // hidden O(n^2): linear scan inside a loop
+        }
+        if (in_loop && is_alloc_name(callee_short)) {
+            d->alloc_in_loop++; // repeated allocation/append inside a loop
+        }
+    }
+
+    // Recursive with no self-call guarded by any conditional → no obvious base
+    // case on the recursive path: a stronger "potentially unbounded" signal.
+    for (int di = 0; di < def_count; di++) {
+        if (has_self && has_self[di] && !(has_guarded && has_guarded[di])) {
+            result->defs.items[di].unguarded_recursion = true;
+        }
+    }
+    free(has_self);
+    free(has_guarded);
 
     uint64_t t2 = now_ns();
 

@@ -5,6 +5,7 @@
  * on a temporary directory with known file layout.
  */
 #include "../src/foundation/compat.h"
+#include "foundation/platform.h" // cbm_normalize_path_sep (drive-canonicalization regression)
 #include "test_framework.h"
 #include "test_helpers.h"
 #include "pipeline/pipeline.h"
@@ -143,7 +144,7 @@ TEST(pipeline_run_null) {
 
 TEST(store_file_persistence) {
     if (setup_test_repo() != 0) {
-        SKIP("failed to create temp dir");
+        FAIL("failed to create temp dir");
     }
     char db_path[512];
     snprintf(db_path, sizeof(db_path), "%s/persist_test.db", g_tmpdir);
@@ -177,7 +178,7 @@ TEST(store_file_persistence) {
 
 TEST(store_bulk_persistence) {
     if (setup_test_repo() != 0) {
-        SKIP("failed to create temp dir");
+        FAIL("failed to create temp dir");
     }
     char db_path[512];
     snprintf(db_path, sizeof(db_path), "%s/bulk_test.db", g_tmpdir);
@@ -215,7 +216,7 @@ TEST(store_bulk_persistence) {
 
 TEST(pipeline_structure_nodes) {
     if (setup_test_repo() != 0) {
-        SKIP("failed to create temp dir");
+        FAIL("failed to create temp dir");
     }
 
     char db_path[512];
@@ -272,7 +273,7 @@ TEST(pipeline_structure_nodes) {
 
 TEST(pipeline_structure_edges) {
     if (setup_test_repo() != 0) {
-        SKIP("failed to create temp dir");
+        FAIL("failed to create temp dir");
     }
 
     char db_path[512];
@@ -304,7 +305,7 @@ TEST(pipeline_structure_edges) {
 
 TEST(pipeline_project_name_derived) {
     if (setup_test_repo() != 0) {
-        SKIP("failed to create temp dir");
+        FAIL("failed to create temp dir");
     }
 
     cbm_pipeline_t *p = cbm_pipeline_new(g_tmpdir, NULL, CBM_MODE_FULL);
@@ -322,7 +323,7 @@ TEST(pipeline_project_name_derived) {
 
 TEST(pipeline_fast_mode) {
     if (setup_test_repo() != 0) {
-        SKIP("failed to create temp dir");
+        FAIL("failed to create temp dir");
     }
 
     char db_path[512];
@@ -351,7 +352,7 @@ TEST(pipeline_fast_mode) {
 
 TEST(pipeline_definitions_function_nodes) {
     if (setup_test_repo() != 0) {
-        SKIP("failed to create temp dir");
+        FAIL("failed to create temp dir");
     }
 
     char db_path[512];
@@ -396,7 +397,7 @@ TEST(pipeline_definitions_function_nodes) {
 
 TEST(pipeline_definitions_defines_edges) {
     if (setup_test_repo() != 0) {
-        SKIP("failed to create temp dir");
+        FAIL("failed to create temp dir");
     }
 
     char db_path[512];
@@ -427,7 +428,7 @@ TEST(pipeline_definitions_defines_edges) {
 
 TEST(pipeline_definitions_properties) {
     if (setup_test_repo() != 0) {
-        SKIP("failed to create temp dir");
+        FAIL("failed to create temp dir");
     }
 
     char db_path[512];
@@ -470,7 +471,7 @@ TEST(pipeline_definitions_properties) {
 
 TEST(pipeline_calls_resolution) {
     if (setup_test_repo() != 0) {
-        SKIP("failed to create temp dir");
+        FAIL("failed to create temp dir");
     }
 
     char db_path[512];
@@ -572,7 +573,7 @@ TEST(githistory_coupling_carries_last_co_change) {
         {files_old, 2, 1700000000LL},   /* oldest a.go/b.go co-change */
         {files_other, 2, 1750000000LL}, /* unrelated pair */
         {files_mid, 2, 1720000000LL},
-        {files_new, 2, 1800000000LL},   /* newest a.go/b.go co-change */
+        {files_new, 2, 1800000000LL}, /* newest a.go/b.go co-change */
     };
 
     cbm_change_coupling_t results[16];
@@ -581,10 +582,9 @@ TEST(githistory_coupling_carries_last_co_change) {
 
     bool found_ab = false;
     for (int i = 0; i < n; i++) {
-        bool is_ab = (strcmp(results[i].file_a, "a.go") == 0 &&
-                      strcmp(results[i].file_b, "b.go") == 0) ||
-                     (strcmp(results[i].file_a, "b.go") == 0 &&
-                      strcmp(results[i].file_b, "a.go") == 0);
+        bool is_ab =
+            (strcmp(results[i].file_a, "a.go") == 0 && strcmp(results[i].file_b, "b.go") == 0) ||
+            (strcmp(results[i].file_a, "b.go") == 0 && strcmp(results[i].file_b, "a.go") == 0);
         if (!is_ab) {
             continue;
         }
@@ -914,7 +914,7 @@ TEST(usages_creates_edges) {
                             "}\n";
 
     if (setup_usages_repo("mypkg/main.go", go_source, "go.mod", "module testmod\ngo 1.21\n") != 0) {
-        SKIP("failed to create temp dir");
+        FAIL("failed to create temp dir");
     }
 
     char db_path[512];
@@ -968,7 +968,7 @@ TEST(usages_no_duplicate_calls) {
                             "}\n";
 
     if (setup_usages_repo("mypkg/main.go", go_source, "go.mod", "module testmod\ngo 1.21\n") != 0) {
-        SKIP("failed to create temp dir");
+        FAIL("failed to create temp dir");
     }
 
     char db_path[512];
@@ -1038,7 +1038,7 @@ TEST(usages_kotlin_creates_edges) {
                             "}\n";
 
     if (setup_usages_repo("Main.kt", kt_source, NULL, NULL) != 0) {
-        SKIP("failed to create temp dir");
+        FAIL("failed to create temp dir");
     }
 
     char db_path[512];
@@ -1080,7 +1080,7 @@ TEST(usages_kotlin_no_duplicate_calls) {
                             "}\n";
 
     if (setup_usages_repo("Main.kt", kt_source, NULL, NULL) != 0) {
-        SKIP("failed to create temp dir");
+        FAIL("failed to create temp dir");
     }
 
     char db_path[512];
@@ -1189,7 +1189,7 @@ TEST(pipeline_python_project) {
         "class DataProcessor:\n    def transform(self, data):\n        return data\n"};
 
     if (setup_lang_repo(files, contents, 2) != 0)
-        SKIP("tmpdir");
+        FAIL("tmpdir");
     char db[512];
     snprintf(db, sizeof(db), "%s/test.db", g_lang_tmpdir);
 
@@ -1235,7 +1235,7 @@ TEST(pipeline_go_cross_package_call) {
         "package svc\n\nfunc ProcessOrder(id string) error {\n\treturn nil\n}\n"};
 
     if (setup_lang_repo(files, contents, 2) != 0)
-        SKIP("tmpdir");
+        FAIL("tmpdir");
     char db[512];
     snprintf(db, sizeof(db), "%s/test.db", g_lang_tmpdir);
 
@@ -1290,7 +1290,7 @@ TEST(pipeline_python_cross_module_call) {
         "def process():\n    result = fetch_data(\"https://example.com\")\n    return result\n"};
 
     if (setup_lang_repo(files, contents, 2) != 0)
-        SKIP("tmpdir");
+        FAIL("tmpdir");
     char db[512];
     snprintf(db, sizeof(db), "%s/test.db", g_lang_tmpdir);
 
@@ -1342,7 +1342,7 @@ TEST(pipeline_go_type_classification) {
                               "type ID = string\n"};
 
     if (setup_lang_repo(files, contents, 1) != 0)
-        SKIP("tmpdir");
+        FAIL("tmpdir");
     char db[512];
     snprintf(db, sizeof(db), "%s/test.db", g_lang_tmpdir);
 
@@ -1394,7 +1394,7 @@ TEST(pipeline_go_grouped_types) {
                               ")\n"};
 
     if (setup_lang_repo(files, contents, 1) != 0)
-        SKIP("tmpdir");
+        FAIL("tmpdir");
     char db[512];
     snprintf(db, sizeof(db), "%s/test.db", g_lang_tmpdir);
 
@@ -1438,7 +1438,7 @@ TEST(pipeline_kotlin_project) {
         "object Config {\n    val API_URL = \"https://example.com/api\"\n}\n"};
 
     if (setup_lang_repo(files, contents, 2) != 0)
-        SKIP("tmpdir");
+        FAIL("tmpdir");
     char db[512];
     snprintf(db, sizeof(db), "%s/test.db", g_lang_tmpdir);
 
@@ -1492,7 +1492,7 @@ TEST(pipeline_lua_anonymous_functions) {
                               "end\n"};
 
     if (setup_lang_repo(files, contents, 1) != 0)
-        SKIP("tmpdir");
+        FAIL("tmpdir");
     char db[512];
     snprintf(db, sizeof(db), "%s/test.db", g_lang_tmpdir);
 
@@ -1543,7 +1543,7 @@ TEST(pipeline_csharp_modern) {
                               "}\n"};
 
     if (setup_lang_repo(files, contents, 2) != 0)
-        SKIP("tmpdir");
+        FAIL("tmpdir");
     char db[512];
     snprintf(db, sizeof(db), "%s/test.db", g_lang_tmpdir);
 
@@ -1583,7 +1583,7 @@ TEST(pipeline_bom_stripping) {
     /* Port of TestBOMStripping — UTF-8 BOM prefix should be handled */
     snprintf(g_lang_tmpdir, sizeof(g_lang_tmpdir), "/tmp/cbm_bom_XXXXXX");
     if (!cbm_mkdtemp(g_lang_tmpdir))
-        SKIP("tmpdir");
+        FAIL("tmpdir");
 
     char path[512];
     snprintf(path, sizeof(path), "%s/bom.go", g_lang_tmpdir);
@@ -1629,7 +1629,7 @@ TEST(pipeline_form_call_resolution) {
                               "#endprocedure\n"};
 
     if (setup_lang_repo(files, contents, 1) != 0)
-        SKIP("tmpdir");
+        FAIL("tmpdir");
     char db[512];
     snprintf(db, sizeof(db), "%s/test.db", g_lang_tmpdir);
 
@@ -1683,7 +1683,7 @@ TEST(pipeline_python_type_inference) {
                               "    return result\n"};
 
     if (setup_lang_repo(files, contents, 2) != 0)
-        SKIP("tmpdir");
+        FAIL("tmpdir");
     char db[512];
     snprintf(db, sizeof(db), "%s/test.db", g_lang_tmpdir);
 
@@ -1742,7 +1742,7 @@ TEST(pipeline_docstring_go_function) {
                               "// Compute does something.\n"
                               "func Compute() {}\n"};
     if (setup_lang_repo(files, contents, 1) != 0)
-        SKIP("tmpdir");
+        FAIL("tmpdir");
     char db[512];
     snprintf(db, sizeof(db), "%s/test.db", g_lang_tmpdir);
     cbm_pipeline_t *p = cbm_pipeline_new(g_lang_tmpdir, db, CBM_MODE_FULL);
@@ -1783,7 +1783,7 @@ TEST(pipeline_docstring_python_function) {
                               "\t\"\"\"Does something.\"\"\"\n"
                               "\tpass\n"};
     if (setup_lang_repo(files, contents, 1) != 0)
-        SKIP("tmpdir");
+        FAIL("tmpdir");
     char db[512];
     snprintf(db, sizeof(db), "%s/test.db", g_lang_tmpdir);
     cbm_pipeline_t *p = cbm_pipeline_new(g_lang_tmpdir, db, CBM_MODE_FULL);
@@ -1824,7 +1824,7 @@ TEST(pipeline_docstring_java_method) {
                               "\tvoid compute() {}\n"
                               "}\n"};
     if (setup_lang_repo(files, contents, 1) != 0)
-        SKIP("tmpdir");
+        FAIL("tmpdir");
     char db[512];
     snprintf(db, sizeof(db), "%s/test.db", g_lang_tmpdir);
     cbm_pipeline_t *p = cbm_pipeline_new(g_lang_tmpdir, db, CBM_MODE_FULL);
@@ -1863,7 +1863,7 @@ TEST(pipeline_docstring_kotlin_function) {
     const char *contents[] = {"/** Computes result. */\n"
                               "fun compute() {}\n"};
     if (setup_lang_repo(files, contents, 1) != 0)
-        SKIP("tmpdir");
+        FAIL("tmpdir");
     char db[512];
     snprintf(db, sizeof(db), "%s/test.db", g_lang_tmpdir);
     cbm_pipeline_t *p = cbm_pipeline_new(g_lang_tmpdir, db, CBM_MODE_FULL);
@@ -1903,7 +1903,7 @@ TEST(pipeline_docstring_go_class) {
                               "// MyStruct is documented.\n"
                               "type MyStruct struct{}\n"};
     if (setup_lang_repo(files, contents, 1) != 0)
-        SKIP("tmpdir");
+        FAIL("tmpdir");
     char db[512];
     snprintf(db, sizeof(db), "%s/test.db", g_lang_tmpdir);
     cbm_pipeline_t *p = cbm_pipeline_new(g_lang_tmpdir, db, CBM_MODE_FULL);
@@ -1954,6 +1954,34 @@ TEST(project_name_from_path) {
         ASSERT_STR_EQ(got, cases[i].want);
         free(got);
     }
+    PASS();
+}
+
+/* Regression for #394/#227/#367: a Windows drive letter is case-insensitive, so
+ * "c:/repo" and "C:/repo" must canonicalize to the SAME project key. Otherwise
+ * agent CWDs (which report lowercase "c:\...") produce a distinct key + colliding
+ * cache file that clobbers the good index, and the lowercase index self-deletes.
+ * Pure string logic, so it reproduces on any platform. */
+TEST(project_name_drive_letter_case_insensitive_issue394) {
+    char *lower = cbm_project_name_from_path("c:/WEBDEV/Cardio-Cloud");
+    char *upper = cbm_project_name_from_path("C:/WEBDEV/Cardio-Cloud");
+    ASSERT_NOT_NULL(lower);
+    ASSERT_NOT_NULL(upper);
+    /* Both must fold to the upper-case-drive key, e.g. "C-WEBDEV-Cardio-Cloud". */
+    ASSERT_STR_EQ(lower, upper);
+    ASSERT_EQ(lower[0], 'C');
+    free(lower);
+    free(upper);
+
+    /* And the normalizer itself upper-cases the drive root in place. */
+    char buf1[32];
+    snprintf(buf1, sizeof(buf1), "%s", "c:/x");
+    cbm_normalize_path_sep(buf1);
+    ASSERT_STR_EQ(buf1, "C:/x");
+    char buf2[32];
+    snprintf(buf2, sizeof(buf2), "%s", "d:\\proj\\sub");
+    cbm_normalize_path_sep(buf2);
+    ASSERT_STR_EQ(buf2, "D:/proj/sub");
     PASS();
 }
 
@@ -2192,7 +2220,7 @@ TEST(configures_env_var_in_config) {
                               "\t_ = url\n"
                               "}\n"};
     if (setup_lang_repo(files, contents, 2) != 0)
-        SKIP("tmpdir");
+        FAIL("tmpdir");
     char db[512];
     snprintf(db, sizeof(db), "%s/test.db", g_lang_tmpdir);
     cbm_pipeline_t *p = cbm_pipeline_new(g_lang_tmpdir, db, CBM_MODE_FULL);
@@ -2225,7 +2253,7 @@ TEST(configures_lowercase_key_skipped) {
 
                               "package main\n\nfunc main() {}\n"};
     if (setup_lang_repo(files, contents, 2) != 0)
-        SKIP("tmpdir");
+        FAIL("tmpdir");
     char db[512];
     snprintf(db, sizeof(db), "%s/test.db", g_lang_tmpdir);
     cbm_pipeline_t *p = cbm_pipeline_new(g_lang_tmpdir, db, CBM_MODE_FULL);
@@ -2249,7 +2277,7 @@ TEST(configures_non_config_file_skipped) {
                               "var API_URL = \"https://api.example.com\"\n\n"
                               "func main() {}\n"};
     if (setup_lang_repo(files, contents, 1) != 0)
-        SKIP("tmpdir");
+        FAIL("tmpdir");
     char db[512];
     snprintf(db, sizeof(db), "%s/test.db", g_lang_tmpdir);
     cbm_pipeline_t *p = cbm_pipeline_new(g_lang_tmpdir, db, CBM_MODE_FULL);
@@ -2294,7 +2322,7 @@ TEST(configures_full_pipeline_integration) {
                               "}\n\n"
                               "func readFile(path string) string { return \"\" }\n"};
     if (setup_lang_repo(files, contents, 4) != 0)
-        SKIP("tmpdir");
+        FAIL("tmpdir");
     char db[512];
     snprintf(db, sizeof(db), "%s/test.db", g_lang_tmpdir);
     cbm_pipeline_t *p = cbm_pipeline_new(g_lang_tmpdir, db, CBM_MODE_FULL);
@@ -2539,7 +2567,7 @@ TEST(decorator_tags_python_auto_discovery) {
                               "def special():\n"
                               "    pass\n"};
     if (setup_lang_repo(files, contents, 1) != 0)
-        SKIP("tmpdir");
+        FAIL("tmpdir");
     char db[512];
     snprintf(db, sizeof(db), "%s/test.db", g_lang_tmpdir);
     cbm_pipeline_t *p = cbm_pipeline_new(g_lang_tmpdir, db, CBM_MODE_FULL);
@@ -2613,7 +2641,7 @@ TEST(decorator_tags_java_class_methods) {
                               "    public void updateOwner() {}\n"
                               "}\n"};
     if (setup_lang_repo(files, contents, 1) != 0)
-        SKIP("tmpdir");
+        FAIL("tmpdir");
     char db[512];
     snprintf(db, sizeof(db), "%s/test.db", g_lang_tmpdir);
     cbm_pipeline_t *p = cbm_pipeline_new(g_lang_tmpdir, db, CBM_MODE_FULL);
@@ -3297,6 +3325,37 @@ TEST(infra_parse_terraform_empty) {
     PASS();
 }
 
+/* ── Helm Chart.yaml dependency parsing (#338) ──────────────────── */
+
+TEST(helm_parse_chart_dependencies_issue338) {
+    const char *src = "apiVersion: v2\n"
+                      "name: mychart\n"
+                      "version: 1.0.0\n"
+                      "dependencies:\n"
+                      "  - name: postgresql\n"
+                      "    repository: https://charts.bitnami.com/bitnami\n"
+                      "    version: 12.x.x\n"
+                      "  - name: redis\n"
+                      "    repository: https://charts.bitnami.com/bitnami\n"
+                      "maintainers:\n"
+                      "  - name: alice\n"; /* not a dependency — outside the block */
+    cbm_helm_chart_t hc;
+    ASSERT_EQ(cbm_parse_helm_chart(src, &hc), 0);
+    ASSERT_STR_EQ(hc.chart_name, "mychart");
+    ASSERT_EQ(hc.dep_count, 2);
+    ASSERT_STR_EQ(hc.deps[0], "postgresql");
+    ASSERT_STR_EQ(hc.deps[1], "redis");
+    PASS();
+}
+
+TEST(helm_parse_chart_no_deps_issue338) {
+    cbm_helm_chart_t hc;
+    ASSERT_EQ(cbm_parse_helm_chart("name: solo\nversion: 0.1.0\n", &hc), 0);
+    ASSERT_STR_EQ(hc.chart_name, "solo");
+    ASSERT_EQ(hc.dep_count, 0);
+    PASS();
+}
+
 /* ── Infrascan: infra QN helper ─────────────────────────────────── */
 
 /* ── Function Registry / Resolver tests ─────────────────────────── */
@@ -3809,7 +3868,7 @@ TEST(envscan_dockerfile_env_urls) {
     char tmpdir[256];
     snprintf(tmpdir, sizeof(tmpdir), "/tmp/cbm_envscan_dock_XXXXXX");
     if (!cbm_mkdtemp(tmpdir))
-        SKIP("tmpdir");
+        FAIL("tmpdir");
 
     write_temp_file(tmpdir, "Dockerfile",
                     "FROM python:3.9-slim\n"
@@ -3837,7 +3896,7 @@ TEST(envscan_shell_env_urls) {
     char tmpdir[256];
     snprintf(tmpdir, sizeof(tmpdir), "/tmp/cbm_envscan_sh_XXXXXX");
     if (!cbm_mkdtemp(tmpdir))
-        SKIP("tmpdir");
+        FAIL("tmpdir");
 
     write_temp_file(tmpdir, "setup.sh",
                     "#!/bin/bash\n"
@@ -3863,7 +3922,7 @@ TEST(envscan_env_file_urls) {
     char tmpdir[256];
     snprintf(tmpdir, sizeof(tmpdir), "/tmp/cbm_envscan_env_XXXXXX");
     if (!cbm_mkdtemp(tmpdir))
-        SKIP("tmpdir");
+        FAIL("tmpdir");
 
     write_temp_file(tmpdir, ".env",
                     "\nAPI_URL=https://api.example.com/v1\n"
@@ -3888,7 +3947,7 @@ TEST(envscan_toml_urls) {
     char tmpdir[256];
     snprintf(tmpdir, sizeof(tmpdir), "/tmp/cbm_envscan_toml_XXXXXX");
     if (!cbm_mkdtemp(tmpdir))
-        SKIP("tmpdir");
+        FAIL("tmpdir");
 
     write_temp_file(tmpdir, "config.toml",
                     "[service]\n"
@@ -3914,7 +3973,7 @@ TEST(envscan_yaml_urls) {
     char tmpdir[256];
     snprintf(tmpdir, sizeof(tmpdir), "/tmp/cbm_envscan_yaml_XXXXXX");
     if (!cbm_mkdtemp(tmpdir))
-        SKIP("tmpdir");
+        FAIL("tmpdir");
 
     write_temp_file(tmpdir, "config.yaml",
                     "service:\n"
@@ -3938,7 +3997,7 @@ TEST(envscan_terraform_urls) {
     char tmpdir[256];
     snprintf(tmpdir, sizeof(tmpdir), "/tmp/cbm_envscan_tf_XXXXXX");
     if (!cbm_mkdtemp(tmpdir))
-        SKIP("tmpdir");
+        FAIL("tmpdir");
 
     write_temp_file(tmpdir, "variables.tf",
                     "variable \"webhook_url\" {\n"
@@ -3963,7 +4022,7 @@ TEST(envscan_properties_urls) {
     char tmpdir[256];
     snprintf(tmpdir, sizeof(tmpdir), "/tmp/cbm_envscan_prop_XXXXXX");
     if (!cbm_mkdtemp(tmpdir))
-        SKIP("tmpdir");
+        FAIL("tmpdir");
 
     write_temp_file(tmpdir, "app.properties",
                     "api.url=https://api.example.com/health\n"
@@ -3984,7 +4043,7 @@ TEST(envscan_secret_key_exclusion) {
     char tmpdir[256];
     snprintf(tmpdir, sizeof(tmpdir), "/tmp/cbm_envscan_skey_XXXXXX");
     if (!cbm_mkdtemp(tmpdir))
-        SKIP("tmpdir");
+        FAIL("tmpdir");
 
     write_temp_file(tmpdir, "Dockerfile",
                     "FROM node:18\n"
@@ -4011,7 +4070,7 @@ TEST(envscan_secret_value_exclusion) {
     char tmpdir[256];
     snprintf(tmpdir, sizeof(tmpdir), "/tmp/cbm_envscan_sval_XXXXXX");
     if (!cbm_mkdtemp(tmpdir))
-        SKIP("tmpdir");
+        FAIL("tmpdir");
 
     write_temp_file(
         tmpdir, "deploy.sh",
@@ -4035,7 +4094,7 @@ TEST(envscan_secret_file_exclusion) {
     char tmpdir[256];
     snprintf(tmpdir, sizeof(tmpdir), "/tmp/cbm_envscan_sfile_XXXXXX");
     if (!cbm_mkdtemp(tmpdir))
-        SKIP("tmpdir");
+        FAIL("tmpdir");
 
     /* Secret file should be skipped */
     write_temp_file(tmpdir, "credentials.sh",
@@ -4067,7 +4126,7 @@ TEST(envscan_skips_ignored_dirs) {
     char tmpdir[256];
     snprintf(tmpdir, sizeof(tmpdir), "/tmp/cbm_envscan_ign_XXXXXX");
     if (!cbm_mkdtemp(tmpdir))
-        SKIP("tmpdir");
+        FAIL("tmpdir");
 
     /* File inside .git should be skipped */
     char gitdir[512];
@@ -4114,7 +4173,7 @@ TEST(envscan_non_url_values_skipped) {
     char tmpdir[256];
     snprintf(tmpdir, sizeof(tmpdir), "/tmp/cbm_envscan_nurl_XXXXXX");
     if (!cbm_mkdtemp(tmpdir))
-        SKIP("tmpdir");
+        FAIL("tmpdir");
 
     write_temp_file(tmpdir, "Dockerfile",
                     "FROM python:3.9\n"
@@ -4373,7 +4432,7 @@ TEST(pipeline_fastapi_depends_edges) {
                               "def get_profile(user = Depends(get_current_user)):\n"
                               "    return {\"user\": user}\n"};
     if (setup_lang_repo(files, contents, 2) != 0) {
-        SKIP("tmpdir");
+        FAIL("tmpdir");
     }
     char db[512];
     snprintf(db, sizeof(db), "%s/test.db", g_lang_tmpdir);
@@ -4418,7 +4477,7 @@ TEST(pipeline_fastapi_depends_edges) {
 TEST(incremental_full_then_noop) {
     /* Full index, then re-run → should detect no changes and skip */
     if (setup_incremental_repo() != 0) {
-        SKIP("setup failed");
+        FAIL("setup failed");
     }
 
     /* First: full index */
@@ -4456,7 +4515,7 @@ TEST(incremental_full_then_noop) {
 TEST(incremental_detects_changed_file) {
     /* Full index, modify one file, re-index → changed file re-parsed */
     if (setup_incremental_repo() != 0) {
-        SKIP("setup failed");
+        FAIL("setup failed");
     }
 
     /* First: full index */
@@ -4497,7 +4556,7 @@ TEST(incremental_detects_changed_file) {
 TEST(incremental_detects_deleted_file) {
     /* Full index, delete a file, re-index → deleted file's nodes removed */
     if (setup_incremental_repo() != 0) {
-        SKIP("setup failed");
+        FAIL("setup failed");
     }
 
     /* First: full index */
@@ -4533,7 +4592,7 @@ TEST(incremental_detects_deleted_file) {
 TEST(incremental_new_file_added) {
     /* Full index, add a new file, re-index → new file's nodes appear */
     if (setup_incremental_repo() != 0) {
-        SKIP("setup failed");
+        FAIL("setup failed");
     }
 
     /* First: full index */
@@ -4583,7 +4642,7 @@ TEST(incremental_fast_preserves_mode_skipped_tools_dir) {
     char tmpdir[256];
     snprintf(tmpdir, sizeof(tmpdir), "/tmp/cbm_modeskip_XXXXXX");
     if (!cbm_mkdtemp(tmpdir)) {
-        SKIP("tmpdir");
+        FAIL("tmpdir");
     }
     char dbpath[512];
     snprintf(dbpath, sizeof(dbpath), "%s/test.db", tmpdir);
@@ -4724,7 +4783,7 @@ TEST(incremental_k8s_manifest_indexed) {
     char tmpdir[256];
     snprintf(tmpdir, sizeof(tmpdir), "/tmp/cbm_k8s_incr_XXXXXX");
     if (!cbm_mkdtemp(tmpdir)) {
-        SKIP("tmpdir");
+        FAIL("tmpdir");
     }
     char dbpath[512];
     snprintf(dbpath, sizeof(dbpath), "%s/test.db", tmpdir);
@@ -4789,7 +4848,7 @@ TEST(incremental_kustomize_module_indexed) {
     char tmpdir[256];
     snprintf(tmpdir, sizeof(tmpdir), "/tmp/cbm_kust_incr_XXXXXX");
     if (!cbm_mkdtemp(tmpdir)) {
-        SKIP("tmpdir");
+        FAIL("tmpdir");
     }
     char dbpath[512];
     snprintf(dbpath, sizeof(dbpath), "%s/test.db", tmpdir);
@@ -5363,6 +5422,90 @@ TEST(project_name_trailing_slash) {
     PASS();
 }
 
+/* ── Complexity propagation pass tests (Tier B) ────────────────── */
+
+/* Find the first Function/Method node with `name` in a label set. Returns a
+ * borrowed pointer into `funcs` or NULL. */
+static const cbm_node_t *find_node_named(cbm_node_t *funcs, int count, const char *name) {
+    for (int i = 0; i < count; i++) {
+        if (strcmp(funcs[i].name, name) == 0)
+            return &funcs[i];
+    }
+    return NULL;
+}
+
+/* The complexity pass propagates loop_depth along CALLS edges into
+ * transitive_loop_depth and flags call-graph cycles as recursive. Caller and
+ * callee live in one file so the calls resolve intra-file (most reliable). */
+TEST(pipeline_complexity_transitive_loop_depth) {
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cbm_cx_XXXXXX");
+    if (!cbm_mkdtemp(tmpdir))
+        FAIL("tmpdir");
+
+    write_temp_file(tmpdir, "cx.go",
+                    "package p\n\n"
+                    "func work() {}\n\n"
+                    "func inner() {\n"
+                    "\tfor i := 0; i < 10; i++ {\n"
+                    "\t\tfor j := 0; j < 10; j++ {\n"
+                    "\t\t\twork()\n"
+                    "\t\t}\n"
+                    "\t}\n"
+                    "}\n\n"
+                    "func outer() {\n"
+                    "\tfor i := 0; i < 10; i++ {\n"
+                    "\t\tinner()\n"
+                    "\t}\n"
+                    "}\n\n"
+                    "func recur(n int) {\n"
+                    "\tif n > 0 {\n"
+                    "\t\trecur(n - 1)\n"
+                    "\t}\n"
+                    "}\n");
+
+    char db_path[512];
+    snprintf(db_path, sizeof(db_path), "%s/cx.db", tmpdir);
+
+    cbm_pipeline_t *p = cbm_pipeline_new(tmpdir, db_path, CBM_MODE_FULL);
+    ASSERT_NOT_NULL(p);
+    ASSERT_EQ(cbm_pipeline_run(p), 0);
+
+    cbm_store_t *s = cbm_store_open_path(db_path);
+    ASSERT_NOT_NULL(s);
+    const char *project = cbm_pipeline_project_name(p);
+
+    cbm_node_t *funcs = NULL;
+    int func_count = 0;
+    ASSERT_EQ(cbm_store_find_nodes_by_label(s, project, "Function", &funcs, &func_count),
+              CBM_STORE_OK);
+    ASSERT_GT(func_count, 0);
+
+    /* inner: two nested loops, callee work() has depth 0 → tld == 2 */
+    const cbm_node_t *inner = find_node_named(funcs, func_count, "inner");
+    ASSERT_NOT_NULL(inner);
+    ASSERT_NOT_NULL(inner->properties_json);
+    ASSERT_TRUE(strstr(inner->properties_json, "\"transitive_loop_depth\":2") != NULL);
+
+    /* outer: own depth 1 + inner's tld 2 → tld == 3 (interprocedural) */
+    const cbm_node_t *outer = find_node_named(funcs, func_count, "outer");
+    ASSERT_NOT_NULL(outer);
+    ASSERT_NOT_NULL(outer->properties_json);
+    ASSERT_TRUE(strstr(outer->properties_json, "\"transitive_loop_depth\":3") != NULL);
+
+    /* recur: self-recursion → recursive:true flagged by the cycle guard */
+    const cbm_node_t *recur = find_node_named(funcs, func_count, "recur");
+    ASSERT_NOT_NULL(recur);
+    ASSERT_NOT_NULL(recur->properties_json);
+    ASSERT_TRUE(strstr(recur->properties_json, "\"recursive\":true") != NULL);
+
+    cbm_store_free_nodes(funcs, func_count);
+    cbm_store_close(s);
+    cbm_pipeline_free(p);
+    th_rmtree(tmpdir);
+    PASS();
+}
+
 SUITE(pipeline) {
     /* Index lock */
     RUN_TEST(pipeline_lock_try_acquire);
@@ -5388,6 +5531,8 @@ SUITE(pipeline) {
     RUN_TEST(pipeline_definitions_function_nodes);
     RUN_TEST(pipeline_definitions_defines_edges);
     RUN_TEST(pipeline_definitions_properties);
+    /* Complexity propagation pass (Tier B) */
+    RUN_TEST(pipeline_complexity_transitive_loop_depth);
     /* Calls pass */
     RUN_TEST(pipeline_calls_resolution);
     /* Git history pass */
@@ -5427,6 +5572,7 @@ SUITE(pipeline) {
     RUN_TEST(pipeline_docstring_go_class);
     /* Project name */
     RUN_TEST(project_name_from_path);
+    RUN_TEST(project_name_drive_letter_case_insensitive_issue394);
     RUN_TEST(project_name_uniqueness);
     /* Git diff helpers */
     RUN_TEST(gitdiff_parse_range_with_count);
@@ -5491,6 +5637,8 @@ SUITE(pipeline) {
     RUN_TEST(infra_parse_terraform_full);
     RUN_TEST(infra_parse_terraform_variables_only);
     RUN_TEST(infra_parse_terraform_empty);
+    RUN_TEST(helm_parse_chart_dependencies_issue338);
+    RUN_TEST(helm_parse_chart_no_deps_issue338);
     /* Infrascan: QN helper */
     RUN_TEST(infra_qn_helper);
     /* Infrascan: pipeline integration */

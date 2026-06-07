@@ -513,6 +513,16 @@ TEST(lang_fn_vimrc) {
     PASS();
 }
 
+/* issue #258: .blade.php is a built-in compound extension → Blade by default
+ * (previously fell through to the single-extension lookup and was mis-typed as
+ * PHP). Plain .php still maps to PHP. */
+TEST(lang_fn_blade_php_compound_issue258) {
+    ASSERT_EQ(cbm_language_for_filename("login.blade.php"), CBM_LANG_BLADE);
+    ASSERT_EQ(cbm_language_for_filename("alert.blade.php"), CBM_LANG_BLADE);
+    ASSERT_EQ(cbm_language_for_filename("index.php"), CBM_LANG_PHP);
+    PASS();
+}
+
 /* Filename with extension falls through to extension lookup */
 TEST(lang_fn_main_go) {
     ASSERT_EQ(cbm_language_for_filename("main.go"), CBM_LANG_GO);
@@ -735,6 +745,22 @@ TEST(lang_ext_pony) {
 
 TEST(lang_ext_luau) {
     ASSERT_EQ(cbm_language_for_extension(".luau"), CBM_LANG_LUAU);
+    PASS();
+}
+
+TEST(lang_ext_qml) {
+    ASSERT_EQ(cbm_language_for_extension(".qml"), CBM_LANG_QML);
+    PASS();
+}
+
+TEST(lang_ext_cfml) {
+    ASSERT_EQ(cbm_language_for_extension(".cfc"), CBM_LANG_CFSCRIPT);
+    ASSERT_EQ(cbm_language_for_extension(".cfm"), CBM_LANG_CFML);
+    PASS();
+}
+
+TEST(lang_ext_helm_tpl) {
+    ASSERT_EQ(cbm_language_for_extension(".tpl"), CBM_LANG_GOTEMPLATE);
     PASS();
 }
 
@@ -1160,6 +1186,7 @@ SUITE(language) {
     RUN_TEST(lang_fn_meson_opts);
     RUN_TEST(lang_fn_meson_opts_txt);
     RUN_TEST(lang_fn_vimrc);
+    RUN_TEST(lang_fn_blade_php_compound_issue258);
     RUN_TEST(lang_fn_main_go);
     RUN_TEST(lang_fn_test_py);
     RUN_TEST(lang_fn_unknown);
@@ -1205,6 +1232,9 @@ SUITE(language) {
     RUN_TEST(lang_ext_hare);
     RUN_TEST(lang_ext_pony);
     RUN_TEST(lang_ext_luau);
+    RUN_TEST(lang_ext_qml);
+    RUN_TEST(lang_ext_cfml);
+    RUN_TEST(lang_ext_helm_tpl);
     RUN_TEST(lang_ext_janet);
     RUN_TEST(lang_ext_sway);
     RUN_TEST(lang_ext_nasm);

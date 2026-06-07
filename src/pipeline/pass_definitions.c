@@ -176,11 +176,35 @@ static void append_json_str_array(char *buf, size_t bufsize, size_t *pos, const 
 
 /* Build properties JSON for a definition node. */
 static void build_def_props(char *buf, size_t bufsize, const CBMDefinition *def) {
-    int n = snprintf(buf, bufsize,
-                     "{\"complexity\":%d,\"lines\":%d,\"is_exported\":%s,"
-                     "\"is_test\":%s,\"is_entry_point\":%s",
+    /* The complexity/loop/recursion metrics are only meaningful for executable
+     * units (Function/Method). Emitting them on the millions of Macro/Field/
+     * Variable/Class/Enum nodes — where they are always zero — bloats every
+     * node's properties (~150 B), inflating RAM, the gbuf merge copy and the
+     * dump. Gate the block to functions; other labels keep the lean base. */
+    const bool is_fn =
+        def->label && (strcmp(def->label, "Function") == 0 || strcmp(def->label, "Method") == 0);
+    int n;
+    if (is_fn) {
+        n = snprintf(buf, bufsize,
+                     "{\"complexity\":%d,\"cognitive\":%d,\"loop_count\":%d,\"loop_depth\":%d,"
+                     "\"self_recursive\":%s,\"param_count\":%d,\"max_access_depth\":%d,"
+                     "\"linear_scan_in_loop\":%d,\"alloc_in_loop\":%d,\"recursion_in_loop\":%s,"
+                     "\"unguarded_recursion\":%s,"
+                     "\"lines\":%d,\"is_exported\":%s,\"is_test\":%s,\"is_entry_point\":%s",
+                     def->complexity, def->cognitive, def->loop_count, def->loop_depth,
+                     def->is_recursive ? "true" : "false", def->param_count, def->max_access_depth,
+                     def->linear_scan_in_loop, def->alloc_in_loop,
+                     def->recursion_in_loop ? "true" : "false",
+                     def->unguarded_recursion ? "true" : "false", def->lines,
+                     def->is_exported ? "true" : "false", def->is_test ? "true" : "false",
+                     def->is_entry_point ? "true" : "false");
+    } else {
+        n = snprintf(buf, bufsize,
+                     "{\"complexity\":%d,\"lines\":%d,\"is_exported\":%s,\"is_test\":%s,"
+                     "\"is_entry_point\":%s",
                      def->complexity, def->lines, def->is_exported ? "true" : "false",
                      def->is_test ? "true" : "false", def->is_entry_point ? "true" : "false");
+    }
 
     if (n <= 0 || (size_t)n >= bufsize) {
         buf[0] = '\0';

@@ -98,6 +98,9 @@ extern const TSLanguage *tree_sitter_teal(void);
 extern const TSLanguage *tree_sitter_hare(void);
 extern const TSLanguage *tree_sitter_pony(void);
 extern const TSLanguage *tree_sitter_luau(void);
+extern const TSLanguage *tree_sitter_qmljs(void);
+extern const TSLanguage *tree_sitter_cfscript(void);
+extern const TSLanguage *tree_sitter_cfml(void);
 extern const TSLanguage *tree_sitter_janet_simple(void);
 extern const TSLanguage *tree_sitter_sway(void);
 extern const TSLanguage *tree_sitter_nasm(void);
@@ -248,6 +251,40 @@ static const char *ts_class_types[] = {"class_declaration",
                                        "internal_module",
                                        NULL};
 static const char *ts_decorator_types[] = {"decorator", NULL};
+
+// ==================== QML (Qt) ====================
+// QMLJS grammar is a TypeScript superset plus declarative ui_* nodes, so the
+// JS/TS function, call, branch, variable and module arrays are reused as-is.
+static const char *qml_class_types[] = {"class_declaration",
+                                        "class",
+                                        "abstract_class_declaration",
+                                        "enum_declaration",
+                                        "interface_declaration",
+                                        "ui_inline_component",
+                                        NULL};
+static const char *qml_field_types[] = {"ui_property", "ui_signal", "public_field_definition",
+                                        NULL};
+static const char *qml_import_types[] = {"import_statement", "import", "ui_import", NULL};
+
+// ==================== CFScript (CFML .cfc script dialect) ====================
+// JS-like grammar: components contain function/method declarations. Reuses the
+// JS call/branch/var/module arrays.
+static const char *cfscript_func_types[] = {"function_declaration", "function_expression",
+                                            "arrow_function", "method_definition", NULL};
+static const char *cfscript_field_types[] = {"property_declaration", NULL};
+static const char *cfscript_import_types[] = {"import_statement", "import", NULL};
+
+// ==================== CFML (tag dialect — .cfm templates) ====================
+// Tag-based grammar (HTML-derived). Embedded <cfscript> functions appear as
+// function_declaration/function_expression; tag <cffunction> nodes
+// (cf_function_tag) are handled separately in the definition walker because
+// their name lives in a cf_attribute rather than a `name` field.
+static const char *cfml_func_types[] = {"function_declaration", "function_expression", NULL};
+static const char *cfml_call_types[] = {"call_expression", NULL};
+static const char *cfml_branch_types[] = {
+    "cf_if_tag",     "cf_elseif_tag",   "cf_else_tag",      "if_statement",
+    "for_statement", "while_statement", "switch_statement", NULL};
+static const char *cfml_module_types[] = {"program", "component_file", NULL};
 
 // ==================== RUST ====================
 static const char *rust_func_types[] = {"function_item", "function_signature_item",
@@ -464,7 +501,9 @@ static const char *elixir_branch_types[] = {"call", NULL};
 static const char *elixir_var_types[] = {"binary_operator", NULL};
 
 // ==================== HASKELL ====================
-static const char *haskell_func_types[] = {"function", "signature", NULL};
+/* "bind" = a nullary value binding (`foo = 1`); has a `name` field like `function`.
+ * `signature` (type annotations) is suppressed in resolve_func_name so it never doubles. */
+static const char *haskell_func_types[] = {"function", "signature", "bind", NULL};
 static const char *haskell_class_types[] = {"class", "data_type", "newtype", NULL};
 static const char *haskell_module_types[] = {"haskell", NULL};
 static const char *haskell_call_types[] = {"infix", "apply", NULL};
@@ -654,7 +693,12 @@ static const char *clojure_module_types[] = {"source", NULL};
 static const char *clojure_call_types[] = {"list_lit", NULL};
 
 // ==================== F# ====================
-static const char *fsharp_func_types[] = {"function_declaration", "value_declaration", NULL};
+/* Top-level `let f () = ...` parses to function_or_value_defn (module-level
+ * value_declaration is aliased to declaration_expression, which wraps it). The
+ * name lives on a function_declaration_left/value_declaration_left child — see
+ * the CBM_LANG_FSHARP branch in resolve_func_name. */
+static const char *fsharp_func_types[] = {"function_declaration", "value_declaration",
+                                          "function_or_value_defn", NULL};
 static const char *fsharp_class_types[] = {"type_definition", "exception_definition", NULL};
 static const char *fsharp_module_types[] = {"file", NULL};
 static const char *fsharp_call_types[] = {"application_expression", "dot_expression", NULL};
@@ -711,7 +755,10 @@ static const char *elm_import_types[] = {"import", NULL};
 static const char *elm_branch_types[] = {"case_of_expr", "if_else_expr", NULL};
 
 // ==================== FORTRAN ====================
-static const char *fortran_func_types[] = {"function", "subroutine", "function_statement", NULL};
+/* subroutine/function wrap an inner *_statement that carries the `name` field;
+ * function_statement was already present, subroutine_statement was missing. */
+static const char *fortran_func_types[] = {"function", "subroutine", "function_statement",
+                                           "subroutine_statement", NULL};
 static const char *fortran_class_types[] = {"derived_type_definition", "enum_statement", NULL};
 static const char *fortran_module_types[] = {"translation_unit", NULL};
 static const char *fortran_call_types[] = {"call_expression", "keyword_argument", "call", NULL};
@@ -776,6 +823,7 @@ static const char *makefile_import_types[] = {"include_directive", "include", NU
 static const char *makefile_var_types[] = {"variable_assignment", NULL};
 
 // ==================== CMAKE ====================
+static const char *cmake_func_types[] = {"function_def", "macro_def", NULL};
 static const char *cmake_module_types[] = {"source_file", NULL};
 static const char *cmake_call_types[] = {"normal_command", NULL};
 
@@ -1163,7 +1211,8 @@ static const char *hare_branch_types[] = {"if_statement", "for_statement", "swit
 static const char *hare_var_types[] = {"let_declaration", "const_declaration", NULL};
 static const char *hare_assign_types[] = {"assignment_expression", NULL};
 static const char *hare_module_types[] = {"source_file", NULL};
-static const char *pony_func_types[] = {"fun", "be", "new", "lambda_expression", NULL};
+static const char *pony_func_types[] = {"method", "constructor", "ffi_method", "lambda_expression",
+                                        NULL};
 static const char *pony_class_types[] = {
     "actor_definition",     "class_definition",     "struct_definition", "trait_definition",
     "interface_definition", "primitive_definition", "type_alias",        NULL};
@@ -1199,11 +1248,13 @@ static const char *sway_branch_types[] = {"if_expression", "match_expression", "
 static const char *sway_var_types[] = {"let_declaration", "const_item", NULL};
 static const char *sway_assign_types[] = {"assignment_expression", NULL};
 static const char *sway_module_types[] = {"source_file", NULL};
+static const char *nasm_func_types[] = {"label", "preproc_def", "preproc_multiline_macro", NULL};
 static const char *nasm_class_types[] = {"struc_declaration", NULL};
 static const char *nasm_call_types[] = {"call_syntax_expression", NULL};
 static const char *nasm_import_types[] = {"preproc_include", NULL};
 static const char *nasm_var_types[] = {"label", NULL};
 static const char *nasm_module_types[] = {"source_file", NULL};
+static const char *assembly_func_types[] = {"label", NULL};
 static const char *assembly_var_types[] = {"label", NULL};
 static const char *assembly_module_types[] = {"program", NULL};
 static const char *astro_module_types[] = {"document", NULL};
@@ -1214,7 +1265,8 @@ static const char *just_import_types[] = {"import", NULL};
 static const char *just_branch_types[] = {"if_expression", NULL};
 static const char *just_assign_types[] = {"assignment", NULL};
 static const char *just_module_types[] = {"source_file", NULL};
-static const char *gotemplate_call_types[] = {"function_call", "method_call", NULL};
+static const char *gotemplate_call_types[] = {"function_call", "method_call", "template_action",
+                                              NULL};
 static const char *gotemplate_module_types[] = {"template", NULL};
 static const char *templ_func_types[] = {"function_declaration", "method_declaration",
                                          "method_elem", NULL};
@@ -1269,8 +1321,10 @@ static const char *thrift_import_types[] = {"include_statement", "extends", "inc
 static const char *thrift_var_types[] = {"const_definition", NULL};
 static const char *thrift_module_types[] = {"document", NULL};
 static const char *capnp_func_types[] = {"method", NULL};
-static const char *capnp_class_types[] = {"struct",          "enum", "interface", "custom_type",
-                                          "type_definition", NULL};
+/* custom_type (a type REFERENCE inside field_type) and type_definition (LHS of a
+ * `using X = ...` directive) are not top-level type defs — including them would
+ * mint spurious Class nodes for every typed field/return. */
+static const char *capnp_class_types[] = {"struct", "enum", "interface", NULL};
 static const char *capnp_field_types[] = {"field", NULL};
 static const char *capnp_import_types[] = {"import", "extends", "using_directive", NULL};
 static const char *capnp_var_types[] = {"const", NULL};
@@ -1324,7 +1378,7 @@ static const char *vhdl_branch_types[] = {"if_statement", "case_statement", "loo
 static const char *vhdl_var_types[] = {"variable_declaration", "signal_declaration",
                                        "constant_declaration", NULL};
 static const char *vhdl_assign_types[] = {"variable_assignment", "signal_assignment", NULL};
-static const char *vhdl_func_types[] = {"subprogram_declaration", NULL};
+static const char *vhdl_func_types[] = {"subprogram_declaration", "subprogram_definition", NULL};
 static const char *vhdl_module_types[] = {"design_file", NULL};
 static const char *systemverilog_func_types[] = {"function_declaration", "task_declaration",
                                                  "function_body_declaration", "function_statement",
@@ -1373,6 +1427,8 @@ static const char *smali_class_types[] = {"class_definition", NULL};
 static const char *smali_field_types[] = {"field_definition", NULL};
 static const char *smali_import_types[] = {"super_directive", "implements_directive", NULL};
 static const char *smali_module_types[] = {"source_file", NULL};
+static const char *tablegen_func_types[] = {"def", "multiclass", "defm", NULL};
+static const char *tablegen_class_types[] = {"class", NULL};
 static const char *tablegen_import_types[] = {"include", "include_directive", NULL};
 static const char *tablegen_module_types[] = {"source_file", NULL};
 static const char *ispc_func_types[] = {"function_definition", NULL};
@@ -1397,7 +1453,9 @@ static const char *cairo_var_types[] = {"let_declaration", "const_item", NULL};
 static const char *cairo_assign_types[] = {"assignment_expression", NULL};
 static const char *cairo_module_types[] = {"source_file", NULL};
 static const char *move_func_types[] = {"function_item", NULL};
-static const char *move_class_types[] = {"struct", "enum", NULL};
+/* This vendored move grammar models only function_item + module as named defs;
+ * "struct"/"enum" exist only as anonymous keyword tokens, never as parent nodes,
+ * so there is no class/struct/enum definition node to match. */
 static const char *move_call_types[] = {"call_expression", NULL};
 static const char *move_import_types[] = {"use_declaration", NULL};
 static const char *move_branch_types[] = {"if_expression", "while_expression", "loop_expression",
@@ -1460,7 +1518,8 @@ static const char *smithy_field_types[] = {"shape_member", NULL};
 static const char *smithy_import_types[] = {"use_statement", NULL};
 static const char *smithy_module_types[] = {"source_file", NULL};
 static const char *wit_func_types[] = {"func_item", "resource_method", NULL};
-static const char *wit_class_types[] = {"record_item", "resource_item", NULL};
+static const char *wit_class_types[] = {"record_item",   "resource_item", "enum_items",
+                                        "variant_items", "flags_items",   NULL};
 static const char *wit_field_types[] = {"record_field", NULL};
 static const char *wit_import_types[] = {
     "import_item", "toplevel_use_item", "export_item", "import", "include", "include_item", NULL};
@@ -1501,7 +1560,6 @@ static const char *soql_module_types[] = {"source_file", NULL};
 static const char *sosl_import_types[] = {"with_clause", NULL};
 static const char *sosl_module_types[] = {"source_file", NULL};
 
-static const char *make_func_types[] = {"recipe", NULL};
 static const char *make_import_types[] = {"include", "include_directive", NULL};
 
 // ==================== PINE SCRIPT ====================
@@ -1840,7 +1898,7 @@ static const CBMLangSpec lang_specs[CBM_LANG_COUNT] = {
                            NULL, empty_types, NULL, NULL, tree_sitter_make, NULL},
 
     // CBM_LANG_CMAKE
-    [CBM_LANG_CMAKE] = {CBM_LANG_CMAKE, make_func_types, empty_types, empty_types,
+    [CBM_LANG_CMAKE] = {CBM_LANG_CMAKE, cmake_func_types, empty_types, empty_types,
                         cmake_module_types, cmake_call_types, make_import_types, empty_types,
                         empty_types, empty_types, empty_types, empty_types, NULL, empty_types, NULL,
                         NULL, tree_sitter_cmake, NULL},
@@ -1937,6 +1995,26 @@ static const CBMLangSpec lang_specs[CBM_LANG_COUNT] = {
                            gdscript_import_types, empty_types, gdscript_branch_types,
                            gdscript_var_types, gdscript_assign_types, empty_types, NULL,
                            gdscript_decorator_types, NULL, NULL, tree_sitter_gdscript, NULL},
+
+    // CBM_LANG_QML
+    [CBM_LANG_QML] =
+        {CBM_LANG_QML, ts_func_types, qml_class_types, qml_field_types, js_module_types,
+         js_call_types, qml_import_types, qml_import_types, js_branch_types, js_var_types,
+         (const char *[]){"assignment_expression", "augmented_assignment_expression", NULL},
+         js_throw_types, NULL, ts_decorator_types, NULL, NULL, tree_sitter_qmljs, NULL},
+
+    // CBM_LANG_CFSCRIPT
+    [CBM_LANG_CFSCRIPT] =
+        {CBM_LANG_CFSCRIPT, cfscript_func_types, empty_types, cfscript_field_types, js_module_types,
+         js_call_types, cfscript_import_types, cfscript_import_types, js_branch_types, js_var_types,
+         (const char *[]){"assignment_expression", "augmented_assignment_expression", NULL},
+         js_throw_types, NULL, empty_types, NULL, NULL, tree_sitter_cfscript, NULL},
+
+    // CBM_LANG_CFML
+    [CBM_LANG_CFML] = {CBM_LANG_CFML, cfml_func_types, empty_types, empty_types, cfml_module_types,
+                       cfml_call_types, empty_types, empty_types, cfml_branch_types, empty_types,
+                       empty_types, empty_types, NULL, empty_types, NULL, NULL, tree_sitter_cfml,
+                       NULL},
 
     // CBM_LANG_GLEAM
     [CBM_LANG_GLEAM] = {CBM_LANG_GLEAM, gleam_func_types, gleam_class_types, gleam_field_types,
@@ -2094,13 +2172,13 @@ static const CBMLangSpec lang_specs[CBM_LANG_COUNT] = {
                        empty_types, NULL, NULL, tree_sitter_sway, NULL},
 
     // CBM_LANG_NASM
-    [CBM_LANG_NASM] = {CBM_LANG_NASM, empty_types, nasm_class_types, empty_types, nasm_module_types,
-                       nasm_call_types, nasm_import_types, empty_types, empty_types, nasm_var_types,
-                       empty_types, empty_types, NULL, empty_types, NULL, NULL, tree_sitter_nasm,
-                       NULL},
+    [CBM_LANG_NASM] = {CBM_LANG_NASM, nasm_func_types, nasm_class_types, empty_types,
+                       nasm_module_types, nasm_call_types, nasm_import_types, empty_types,
+                       empty_types, nasm_var_types, empty_types, empty_types, NULL, empty_types,
+                       NULL, NULL, tree_sitter_nasm, NULL},
 
     // CBM_LANG_ASSEMBLY
-    [CBM_LANG_ASSEMBLY] = {CBM_LANG_ASSEMBLY, empty_types, empty_types, empty_types,
+    [CBM_LANG_ASSEMBLY] = {CBM_LANG_ASSEMBLY, assembly_func_types, empty_types, empty_types,
                            assembly_module_types, empty_types, empty_types, empty_types,
                            empty_types, assembly_var_types, empty_types, empty_types, NULL,
                            empty_types, NULL, NULL, tree_sitter_asm, NULL},
@@ -2311,10 +2389,10 @@ static const CBMLangSpec lang_specs[CBM_LANG_COUNT] = {
                         NULL, tree_sitter_smali, NULL},
 
     // CBM_LANG_TABLEGEN
-    [CBM_LANG_TABLEGEN] = {CBM_LANG_TABLEGEN, empty_types, empty_types, empty_types,
-                           tablegen_module_types, empty_types, tablegen_import_types, empty_types,
-                           empty_types, empty_types, empty_types, empty_types, NULL, empty_types,
-                           NULL, NULL, tree_sitter_tablegen, NULL},
+    [CBM_LANG_TABLEGEN] = {CBM_LANG_TABLEGEN, tablegen_func_types, tablegen_class_types,
+                           empty_types, tablegen_module_types, empty_types, tablegen_import_types,
+                           empty_types, empty_types, empty_types, empty_types, empty_types, NULL,
+                           empty_types, NULL, NULL, tree_sitter_tablegen, NULL},
 
     // CBM_LANG_ISPC
     [CBM_LANG_ISPC] = {CBM_LANG_ISPC, ispc_func_types, ispc_class_types, empty_types,
@@ -2329,10 +2407,10 @@ static const CBMLangSpec lang_specs[CBM_LANG_COUNT] = {
                         empty_types, NULL, NULL, tree_sitter_cairo, NULL},
 
     // CBM_LANG_MOVE
-    [CBM_LANG_MOVE] = {CBM_LANG_MOVE, move_func_types, move_class_types, empty_types,
-                       move_module_types, move_call_types, move_import_types, empty_types,
-                       move_branch_types, move_var_types, move_assign_types, empty_types, NULL,
-                       empty_types, NULL, NULL, tree_sitter_move, NULL},
+    [CBM_LANG_MOVE] = {CBM_LANG_MOVE, move_func_types, empty_types, empty_types, move_module_types,
+                       move_call_types, move_import_types, empty_types, move_branch_types,
+                       move_var_types, move_assign_types, empty_types, NULL, empty_types, NULL,
+                       NULL, tree_sitter_move, NULL},
 
     // CBM_LANG_SQUIRREL
     [CBM_LANG_SQUIRREL] = {CBM_LANG_SQUIRREL, squirrel_func_types, squirrel_class_types,

@@ -28,6 +28,11 @@ static void parse_rust_imports(CBMExtractCtx *ctx);
 static void parse_c_imports(CBMExtractCtx *ctx);
 static void parse_ruby_imports(CBMExtractCtx *ctx);
 static void parse_lua_imports(CBMExtractCtx *ctx);
+static void parse_r_imports(CBMExtractCtx *ctx);
+static void parse_kotlin_imports(CBMExtractCtx *ctx);
+static void parse_dart_imports(CBMExtractCtx *ctx);
+static void parse_haskell_imports(CBMExtractCtx *ctx);
+static void parse_zig_imports(CBMExtractCtx *ctx);
 static void parse_generic_imports(CBMExtractCtx *ctx, const char *node_type);
 static void parse_wolfram_imports(CBMExtractCtx *ctx);
 
@@ -711,6 +716,98 @@ static void parse_lua_imports(CBMExtractCtx *ctx) {
     ts_tree_cursor_delete(&cursor);
 }
 
+// --- R imports: library()/require()/source() + box::use() (#218) ---
+
+// Emit an IMPORTS edge for a module path string (strips a trailing [symbols]
+// list and surrounding quotes; uses the last path segment as the local name).
+static void r_push_import(CBMExtractCtx *ctx, const char *raw) {
+    CBMArena *a = ctx->arena;
+    if (!raw || !raw[0]) {
+        return;
+    }
+    char *mod = strip_quotes(a, raw);
+    // box::use specs look like "shiny[moduleServer, NS]" or
+    // "app/logic/validation[validate_input]" — the module path is the part
+    // before the '[' symbol list.
+    char *bracket = strchr(mod, '[');
+    if (bracket) {
+        *bracket = '\0';
+    }
+    // Trim trailing whitespace left by truncation.
+    size_t len = strlen(mod);
+    while (len > 0 && (mod[len - SKIP_ONE] == ' ' || mod[len - SKIP_ONE] == '\t' ||
+                       mod[len - SKIP_ONE] == '\n')) {
+        mod[--len] = '\0';
+    }
+    if (mod[0] == '\0') {
+        return;
+    }
+    CBMImport imp = {.local_name = path_last(a, mod), .module_path = mod};
+    cbm_imports_push(&ctx->result->imports, a, imp);
+}
+
+// Recursively scan R for import-producing calls.
+static void r_collect_imports(CBMExtractCtx *ctx, TSNode node) { // NOLINT(misc-no-recursion)
+    if (strcmp(ts_node_type(node), "call") == 0) {
+        TSNode fn = ts_node_child_by_field_name(node, TS_FIELD("function"));
+        TSNode args = ts_node_child_by_field_name(node, TS_FIELD("arguments"));
+        if (!ts_node_is_null(fn) && !ts_node_is_null(args)) {
+            const char *ft = ts_node_type(fn);
+            if (strcmp(ft, "namespace_operator") == 0) {
+                // box::use(mod[syms], pkg/path[syms], ...) — one IMPORTS per arg.
+                TSNode lhs = ts_node_child_by_field_name(fn, TS_FIELD("lhs"));
+                TSNode rhs = ts_node_child_by_field_name(fn, TS_FIELD("rhs"));
+                char *lt =
+                    ts_node_is_null(lhs) ? NULL : cbm_node_text(ctx->arena, lhs, ctx->source);
+                char *rt =
+                    ts_node_is_null(rhs) ? NULL : cbm_node_text(ctx->arena, rhs, ctx->source);
+                if (lt && rt && strcmp(lt, "box") == 0 && strcmp(rt, "use") == 0) {
+                    uint32_t na = ts_node_named_child_count(args);
+                    for (uint32_t i = 0; i < na; i++) {
+                        TSNode arg = ts_node_named_child(args, i);
+                        if (strcmp(ts_node_type(arg), "argument") != 0) {
+                            continue;
+                        }
+                        TSNode val = ts_node_child_by_field_name(arg, TS_FIELD("value"));
+                        if (!ts_node_is_null(val)) {
+                            r_push_import(ctx, cbm_node_text(ctx->arena, val, ctx->source));
+                        }
+                    }
+                }
+            } else if (strcmp(ft, "identifier") == 0) {
+                // library(pkg) / require(pkg) / requireNamespace("pkg") /
+                // loadNamespace("pkg") / source("file.R") — first arg is the module.
+                char *fname = cbm_node_text(ctx->arena, fn, ctx->source);
+                if (fname &&
+                    (strcmp(fname, "library") == 0 || strcmp(fname, "require") == 0 ||
+                     strcmp(fname, "requireNamespace") == 0 ||
+                     strcmp(fname, "loadNamespace") == 0 || strcmp(fname, "source") == 0)) {
+                    uint32_t na = ts_node_named_child_count(args);
+                    for (uint32_t i = 0; i < na; i++) {
+                        TSNode arg = ts_node_named_child(args, i);
+                        if (strcmp(ts_node_type(arg), "argument") != 0) {
+                            continue;
+                        }
+                        TSNode val = ts_node_child_by_field_name(arg, TS_FIELD("value"));
+                        if (!ts_node_is_null(val)) {
+                            r_push_import(ctx, cbm_node_text(ctx->arena, val, ctx->source));
+                        }
+                        break; // first positional argument only
+                    }
+                }
+            }
+        }
+    }
+    uint32_t n = ts_node_named_child_count(node);
+    for (uint32_t i = 0; i < n; i++) {
+        r_collect_imports(ctx, ts_node_named_child(node, i));
+    }
+}
+
+static void parse_r_imports(CBMExtractCtx *ctx) {
+    r_collect_imports(ctx, ctx->root);
+}
+
 // --- Generic import parsing for languages with simple import_declaration ---
 
 // Try known field names (path/source/module/name) to extract import path.
@@ -770,6 +867,150 @@ static void parse_generic_imports(CBMExtractCtx *ctx, const char *node_type) {
         }
     } while (ts_tree_cursor_goto_next_sibling(&cursor));
     ts_tree_cursor_delete(&cursor);
+}
+
+// --- Kotlin imports ---
+// tree-sitter-kotlin nests imports: source_file -> import_list -> import_header*.
+// parse_generic_imports only scans the DIRECT children of root, and "import" is
+// the keyword token (anon_sym_import), not a statement node — so a generic
+// match on "import" finds nothing.  Descend into import_list (and accept a bare
+// import_header for grammar variants) and reuse the generic path extractors.
+static void extract_one_import_header(CBMExtractCtx *ctx, TSNode header) {
+    if (!try_generic_path_fields(ctx, header)) {
+        generic_import_from_text(ctx, header);
+    }
+}
+
+static void parse_kotlin_imports(CBMExtractCtx *ctx) {
+    TSTreeCursor cursor = ts_tree_cursor_new(ctx->root);
+    if (!ts_tree_cursor_goto_first_child(&cursor)) {
+        ts_tree_cursor_delete(&cursor);
+        return;
+    }
+    do {
+        TSNode node = ts_tree_cursor_current_node(&cursor);
+        const char *kind = ts_node_type(node);
+        if (strcmp(kind, "import_header") == 0) {
+            extract_one_import_header(ctx, node);
+        } else if (strcmp(kind, "import_list") == 0) {
+            uint32_t nc = ts_node_child_count(node);
+            for (uint32_t j = 0; j < nc; j++) {
+                TSNode child = ts_node_child(node, j);
+                if (strcmp(ts_node_type(child), "import_header") == 0) {
+                    extract_one_import_header(ctx, child);
+                }
+            }
+        }
+    } while (ts_tree_cursor_goto_next_sibling(&cursor));
+    ts_tree_cursor_delete(&cursor);
+}
+
+// Find the first descendant node of `type` (DFS, pre-order). Returns true and
+// writes *out on the first match. Shared by the Dart/Zig import parsers, whose
+// URI/string is nested several levels below the import node.
+static bool find_first_descendant_of(TSNode node, const char *type, // NOLINT(misc-no-recursion)
+                                     TSNode *out) {
+    if (strcmp(ts_node_type(node), type) == 0) {
+        *out = node;
+        return true;
+    }
+    uint32_t n = ts_node_named_child_count(node);
+    for (uint32_t i = 0; i < n; i++) {
+        if (find_first_descendant_of(ts_node_named_child(node, i), type, out)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// --- Dart imports ---
+// tree-sitter-dart wraps each top-level import as `import_or_export`; the URI is
+// a `string_literal` nested under library_import -> import_specification ->
+// configurable_uri -> uri. The old dispatch matched "import_declaration" (which
+// tree-sitter-dart never emits) -> 0 imports. Find the first string_literal under
+// each import_or_export and strip its quotes.
+static void parse_dart_imports(CBMExtractCtx *ctx) {
+    CBMArena *a = ctx->arena;
+    TSTreeCursor cursor = ts_tree_cursor_new(ctx->root);
+    if (!ts_tree_cursor_goto_first_child(&cursor)) {
+        ts_tree_cursor_delete(&cursor);
+        return;
+    }
+    do {
+        TSNode node = ts_tree_cursor_current_node(&cursor);
+        if (strcmp(ts_node_type(node), "import_or_export") != 0) {
+            continue;
+        }
+        TSNode uri = node;
+        if (find_first_descendant_of(node, "string_literal", &uri)) {
+            char *path = strip_quotes(a, cbm_node_text(a, uri, ctx->source));
+            if (path && path[0]) {
+                CBMImport imp = {.local_name = path_last(a, path), .module_path = path};
+                cbm_imports_push(&ctx->result->imports, a, imp);
+            }
+        }
+    } while (ts_tree_cursor_goto_next_sibling(&cursor));
+    ts_tree_cursor_delete(&cursor);
+}
+
+// --- Haskell imports ---
+// tree-sitter-haskell nests imports under an `imports` container (and/or lists
+// `import` nodes); each `import` carries a `module` field. parse_generic_imports
+// only scanned root children for "import", missing the container -> 0 imports.
+// Descend into `imports` (and accept a root-level `import`) and reuse the generic
+// path extractors, which pick up the "module" field.
+static void parse_haskell_imports(CBMExtractCtx *ctx) {
+    TSTreeCursor cursor = ts_tree_cursor_new(ctx->root);
+    if (!ts_tree_cursor_goto_first_child(&cursor)) {
+        ts_tree_cursor_delete(&cursor);
+        return;
+    }
+    do {
+        TSNode node = ts_tree_cursor_current_node(&cursor);
+        const char *kind = ts_node_type(node);
+        if (strcmp(kind, "import") == 0) {
+            extract_one_import_header(ctx, node);
+        } else if (strcmp(kind, "imports") == 0) {
+            uint32_t nc = ts_node_child_count(node);
+            for (uint32_t j = 0; j < nc; j++) {
+                TSNode child = ts_node_child(node, j);
+                if (strcmp(ts_node_type(child), "import") == 0) {
+                    extract_one_import_header(ctx, child);
+                }
+            }
+        }
+    } while (ts_tree_cursor_goto_next_sibling(&cursor));
+    ts_tree_cursor_delete(&cursor);
+}
+
+// --- Zig imports ---
+// Zig imports are `const std = @import("std");` — a `builtin_function` (@import)
+// nested inside a variable_declaration, NOT a root child. The old dispatch scanned
+// root for "builtin_function" -> 0. DFS the whole tree for builtin_function nodes
+// whose text starts with @import/@cImport and take their first string argument.
+static void parse_zig_imports(CBMExtractCtx *ctx) {
+    CBMArena *a = ctx->arena;
+    TSNodeStack stack;
+    ts_nstack_init(&stack, a, CBM_SZ_512);
+    ts_nstack_push(&stack, a, ctx->root);
+    while (stack.count > 0) {
+        TSNode node = ts_nstack_pop(&stack);
+        if (strcmp(ts_node_type(node), "builtin_function") == 0) {
+            char *bf = cbm_node_text(a, node, ctx->source);
+            if (bf && (strncmp(bf, "@import", sizeof("@import") - 1) == 0 ||
+                       strncmp(bf, "@cImport", sizeof("@cImport") - 1) == 0)) {
+                TSNode str = node;
+                if (find_first_descendant_of(node, "string", &str)) {
+                    char *path = strip_quotes(a, cbm_node_text(a, str, ctx->source));
+                    if (path && path[0]) {
+                        CBMImport imp = {.local_name = path_last(a, path), .module_path = path};
+                        cbm_imports_push(&ctx->result->imports, a, imp);
+                    }
+                }
+            }
+        }
+        ts_nstack_push_children(&stack, a, node);
+    }
 }
 
 // --- Wolfram imports ---
@@ -953,7 +1194,7 @@ void cbm_extract_imports(CBMExtractCtx *ctx) {
         parse_java_imports(ctx);
         break;
     case CBM_LANG_KOTLIN:
-        parse_generic_imports(ctx, "import");
+        parse_kotlin_imports(ctx);
         break;
     case CBM_LANG_SCALA:
         parse_generic_imports(ctx, "import_declaration");
@@ -979,6 +1220,9 @@ void cbm_extract_imports(CBMExtractCtx *ctx) {
     case CBM_LANG_LUA:
         parse_lua_imports(ctx);
         break;
+    case CBM_LANG_R:
+        parse_r_imports(ctx);
+        break;
     case CBM_LANG_ELIXIR:
         // Elixir: import/use/alias/require are call nodes
         parse_generic_imports(ctx, "call");
@@ -988,13 +1232,13 @@ void cbm_extract_imports(CBMExtractCtx *ctx) {
         parse_generic_imports(ctx, "command");
         break;
     case CBM_LANG_ZIG:
-        parse_generic_imports(ctx, "builtin_function");
+        parse_zig_imports(ctx);
         break;
     case CBM_LANG_ERLANG:
         parse_generic_imports(ctx, "module_attribute");
         break;
     case CBM_LANG_HASKELL:
-        parse_generic_imports(ctx, "import");
+        parse_haskell_imports(ctx);
         break;
     case CBM_LANG_OCAML:
         parse_generic_imports(ctx, "open_module");
@@ -1010,8 +1254,10 @@ void cbm_extract_imports(CBMExtractCtx *ctx) {
         parse_generic_imports(ctx, "groovy_import");
         break;
     case CBM_LANG_SWIFT:
-    case CBM_LANG_DART:
         parse_generic_imports(ctx, "import_declaration");
+        break;
+    case CBM_LANG_DART:
+        parse_dart_imports(ctx);
         break;
     case CBM_LANG_LEAN:
         parse_generic_imports(ctx, "import");

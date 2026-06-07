@@ -22,6 +22,12 @@ enum {
     PP_LOG_THRESH = 24,
     PP_LOG_INTERVAL = 10,
     PP_TIMER_THRESH = 1000,
+    /* Extraction memory back-pressure: when the process is over its RSS budget,
+     * a worker reclaims + naps before pulling another file so peers can finish
+     * and return pages. Bounded spins avoid deadlock when the resident graph
+     * itself is near budget (then proceed with a soft overshoot). */
+    PP_BACKPRESSURE_MAX_SPINS = 40,
+    PP_BACKPRESSURE_NAP_NS = 3000000, /* 3 ms */
 };
 #define PP_NSEC_PER_SEC 1000000000ULL
 #define PP_USEC_PER_MS 1000000ULL
@@ -42,6 +48,7 @@ enum { PP_CSHARP_M_PREFIX_LEN = 2 };
 #include "pipeline/pipeline_internal.h"
 #include "pipeline/pass_lsp_cross.h" /* cbm_pxc_* helpers for fused cross-file LSP */
 #include "pipeline/lsp_resolve.h"
+#include "helpers.h" /* cbm_kind_in_set_free_cache — per-worker-thread cache teardown */
 #include "pipeline/worker_pool.h"
 #include "foundation/compat.h"
 #include "foundation/compat_thread.h"
@@ -211,11 +218,35 @@ static void append_json_str_array(char *buf, size_t bufsize, size_t *pos, const 
 }
 
 static void build_def_props(char *buf, size_t bufsize, const CBMDefinition *def) {
-    int n = snprintf(buf, bufsize,
-                     "{\"complexity\":%d,\"lines\":%d,\"is_exported\":%s,"
-                     "\"is_test\":%s,\"is_entry_point\":%s",
+    /* Complexity/loop/recursion metrics are meaningful only for Function/Method.
+     * Gate the block so the millions of Macro/Field/Variable/Class/Enum nodes
+     * keep a lean properties blob (lossless — those fields are always zero for
+     * non-functions). Cuts RAM, gbuf-merge copy and dump volume. Mirrors
+     * pass_definitions.c::build_def_props — keep both in sync. */
+    const bool is_fn =
+        def->label && (strcmp(def->label, "Function") == 0 || strcmp(def->label, "Method") == 0);
+    int n;
+    if (is_fn) {
+        n = snprintf(buf, bufsize,
+                     "{\"complexity\":%d,\"cognitive\":%d,\"loop_count\":%d,\"loop_depth\":%d,"
+                     "\"self_recursive\":%s,\"param_count\":%d,\"max_access_depth\":%d,"
+                     "\"linear_scan_in_loop\":%d,\"alloc_in_loop\":%d,\"recursion_in_loop\":%s,"
+                     "\"unguarded_recursion\":%s,"
+                     "\"lines\":%d,\"is_exported\":%s,\"is_test\":%s,\"is_entry_point\":%s",
+                     def->complexity, def->cognitive, def->loop_count, def->loop_depth,
+                     def->is_recursive ? "true" : "false", def->param_count, def->max_access_depth,
+                     def->linear_scan_in_loop, def->alloc_in_loop,
+                     def->recursion_in_loop ? "true" : "false",
+                     def->unguarded_recursion ? "true" : "false", def->lines,
+                     def->is_exported ? "true" : "false", def->is_test ? "true" : "false",
+                     def->is_entry_point ? "true" : "false");
+    } else {
+        n = snprintf(buf, bufsize,
+                     "{\"complexity\":%d,\"lines\":%d,\"is_exported\":%s,\"is_test\":%s,"
+                     "\"is_entry_point\":%s",
                      def->complexity, def->lines, def->is_exported ? "true" : "false",
                      def->is_test ? "true" : "false", def->is_entry_point ? "true" : "false");
+    }
     if (n <= 0 || (size_t)n >= bufsize) {
         buf[0] = '\0';
         return;
@@ -476,6 +507,24 @@ static void extract_worker(int worker_id, void *ctx_ptr) {
             break;
         }
 
+        /* Memory back-pressure (large repos): if the process is over its RSS
+         * budget, reclaim this thread's freed pages and nap so peer workers can
+         * finish their current file and return memory before this worker adds
+         * another parse working set. Caps the concurrent extraction transient
+         * near the budget instead of letting all workers parse their biggest
+         * files at once. Self-disabling when the budget is unset (tests) or RSS
+         * is under budget; bounded spins avoid deadlock when the resident graph
+         * is itself near budget (then proceed with a soft overshoot). */
+        if (cbm_mem_budget() > 0 && cbm_mem_over_budget()) {
+            cbm_mem_collect();
+            for (int bp = 0; bp < PP_BACKPRESSURE_MAX_SPINS && cbm_mem_over_budget() &&
+                             !atomic_load_explicit(ec->cancelled, memory_order_relaxed);
+                 bp++) {
+                struct timespec nap = {0, PP_BACKPRESSURE_NAP_NS};
+                cbm_nanosleep(&nap, NULL);
+            }
+        }
+
         int file_idx = ec->sorted[sort_pos].idx;
         const cbm_file_info_t *fi = &ec->files[file_idx];
 
@@ -587,6 +636,7 @@ static void extract_worker(int worker_id, void *ctx_ptr) {
 
     /* Final cleanup (parser already destroyed in loop, just slab state) */
     cbm_slab_destroy_thread();
+    cbm_kind_in_set_free_cache(); /* free this worker thread's node-type bitset cache */
 }
 
 static void merge_pkg_entries(cbm_pipeline_ctx_t *ctx, cbm_pkg_entries_t *pkg_entries,
@@ -1267,8 +1317,8 @@ static void detect_url_in_args(cbm_gbuf_t *gbuf, const cbm_gbuf_node_t *source,
 /* Extract gRPC service and method from a callee name.
  * Handles patterns like: pb.NewFooServiceClient(conn).GetBar → Foo/GetBar
  * Also: FooServiceGrpc.newBlockingStub(ch).getBar → FooService/getBar */
-static bool extract_grpc_service_method(const char *callee, char *service, size_t srv_sz,
-                                        char *method, size_t meth_sz) {
+bool extract_grpc_service_method(const char *callee, char *service, size_t srv_sz, char *method,
+                                 size_t meth_sz) {
     service[0] = '\0';
     method[0] = '\0';
     if (!callee) {
@@ -1298,20 +1348,35 @@ static bool extract_grpc_service_method(const char *callee, char *service, size_
         s += CBM_SZ_3;
     }
 
-    /* Strip common suffixes: Client, ServiceClient, ServiceGrpc, Stub */
+    /* Strip the generated-stub/client suffix, preserving the canonical
+     * proto-declared service name. The proto service is `<X>Service`; the
+     * generated client is `<X>ServiceClient` / `<X>ServiceGrpc`, so we strip
+     * only the trailing stub/client token (Client/Stub/Grpc/…), NOT "Service"
+     * itself — stripping "ServiceClient" yielded `<X>` and broke cross-repo
+     * matching against the `<X>Service` declared name (#294). Longest tokens
+     * first so e.g. BlockingStub wins over Stub.
+     *
+     * A match also serves as the gRPC stub-type signal: we ONLY emit a Route
+     * when a recognized suffix is actually present. Without this gate the
+     * fallback turned ordinary receiver vars (`_provider.GetGroup`,
+     * `_builder.AddSomeService`) into phantom `__grpc__provider/...` Routes
+     * that correspond to no .proto anywhere (#294). */
     snprintf(service, srv_sz, "%s", s);
     size_t slen = strlen(service);
-    static const char *suffixes[] = {"ServiceClient", "Client", "ServiceGrpc", "BlockingStub",
-                                     "FutureStub",    "Stub",   "Servicer",    NULL};
-    for (const char **sfx = suffixes; *sfx; sfx++) {
+    static const char *const suffixes[] = {"BlockingStub", "FutureStub", "AsyncStub",
+                                           "AsyncClient",  "Servicer",   "Client",
+                                           "Stub",         "Grpc",       NULL};
+    bool stripped = false;
+    for (const char *const *sfx = suffixes; *sfx; sfx++) {
         size_t flen = strlen(*sfx);
         if (slen > flen && strcmp(service + slen - flen, *sfx) == 0) {
             service[slen - flen] = '\0';
+            stripped = true;
             break;
         }
     }
 
-    return service[0] && method[0];
+    return stripped && service[0] && method[0];
 }
 
 /* Emit GRPC_CALLS edge via gRPC Route node. */

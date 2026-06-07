@@ -36,6 +36,8 @@ static void recompute_state(WalkState *state, const char *module_qn) {
     state->enclosing_class_qn = NULL;
     state->inside_call = false;
     state->inside_import = false;
+    state->loop_depth = 0;
+    state->branch_depth = 0;
 
     for (int i = 0; i < state->scope_top; i++) {
         switch (state->scopes[i].kind) {
@@ -50,6 +52,12 @@ static void recompute_state(WalkState *state, const char *module_qn) {
             break;
         case SCOPE_IMPORT:
             state->inside_import = true;
+            break;
+        case SCOPE_LOOP:
+            state->loop_depth++;
+            break;
+        case SCOPE_BRANCH:
+            state->branch_depth++;
             break;
         default:
             break;
@@ -88,6 +96,11 @@ static TSNode resolve_func_name_node(TSNode node) {
             name_node = ts_node_child_by_field_name(parent, TS_FIELD("name"));
         }
     }
+    /* Grammars without a `name` field (e.g. newer tree-sitter-kotlin): the
+     * function name is a simple_identifier child of function_declaration. */
+    if (ts_node_is_null(name_node) && strcmp(ts_node_type(node), "function_declaration") == 0) {
+        name_node = cbm_find_child_by_kind(node, "simple_identifier");
+    }
     return name_node;
 }
 
@@ -118,6 +131,10 @@ static const char *compute_func_qn(CBMExtractCtx *ctx, TSNode node, const CBMLan
 // Compute class QN for scope tracking.
 static const char *compute_class_qn(CBMExtractCtx *ctx, TSNode node) {
     TSNode name_node = ts_node_child_by_field_name(node, TS_FIELD("name"));
+    /* Newer tree-sitter-kotlin: class/object name is a type_identifier child. */
+    if (ts_node_is_null(name_node) && ctx->language == CBM_LANG_KOTLIN) {
+        name_node = cbm_find_child_by_kind(node, "type_identifier");
+    }
     if (ts_node_is_null(name_node)) {
         return NULL;
     }
@@ -685,6 +702,15 @@ static void push_boundary_scopes(CBMExtractCtx *ctx, TSNode node, const CBMLangS
     }
     if (spec->import_node_types && cbm_kind_in_set(node, spec->import_node_types)) {
         push_scope(state, SCOPE_IMPORT, depth, NULL);
+    }
+    /* Loop / branch nesting for bottleneck metrics. Loops are gated on named
+     * nodes so anonymous `for`/`while` keyword tokens don't count. A loop is NOT
+     * also counted as a branch (many specs list loops in branching_node_types,
+     * but a loop is not a base-case guard for the unguarded-recursion signal). */
+    if (ts_node_is_named(node) && cbm_is_loop_node_type(ts_node_type(node))) {
+        push_scope(state, SCOPE_LOOP, depth, NULL);
+    } else if (spec->branching_node_types && cbm_kind_in_set(node, spec->branching_node_types)) {
+        push_scope(state, SCOPE_BRANCH, depth, NULL);
     }
 }
 

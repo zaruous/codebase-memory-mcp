@@ -739,6 +739,83 @@ TEST(search_code_multi_word) {
     PASS();
 }
 
+/* issue #283: search_code with regex=true and a syntactically invalid pattern
+ * must return an explicit error, not an empty result indistinguishable from a
+ * legitimate no-match. */
+TEST(search_code_invalid_regex_errors_issue283) {
+    char tmp[512];
+    cbm_mcp_server_t *srv = setup_snippet_server(tmp, sizeof(tmp));
+    ASSERT_NOT_NULL(srv);
+
+    /* Unclosed group under regex=true → must be flagged as an error. */
+    char *resp =
+        cbm_mcp_server_handle(srv, "{\"jsonrpc\":\"2.0\",\"id\":91,\"method\":\"tools/call\","
+                                   "\"params\":{\"name\":\"search_code\","
+                                   "\"arguments\":{\"pattern\":\"func(\",\"regex\":true,"
+                                   "\"project\":\"test-project\"}}}");
+    ASSERT_NOT_NULL(resp);
+    ASSERT_NOT_NULL(strstr(resp, "\"isError\":true"));
+    ASSERT_NOT_NULL(strstr(resp, "invalid regex"));
+    free(resp);
+
+    /* Same pattern as a literal (regex=false) must NOT error. */
+    resp = cbm_mcp_server_handle(srv, "{\"jsonrpc\":\"2.0\",\"id\":92,\"method\":\"tools/call\","
+                                      "\"params\":{\"name\":\"search_code\","
+                                      "\"arguments\":{\"pattern\":\"func(\",\"regex\":false,"
+                                      "\"project\":\"test-project\"}}}");
+    ASSERT_NOT_NULL(resp);
+    ASSERT_TRUE(strstr(resp, "invalid regex") == NULL);
+    free(resp);
+
+    cleanup_snippet_dir(tmp);
+    cbm_mcp_server_free(srv);
+    PASS();
+}
+
+/* issue #282: a literal '|' under regex=false is a silent 0-match trap. It must
+ * now be surfaced as a warning (and the result carries elapsed_ms). */
+TEST(search_code_literal_pipe_warns_issue282) {
+    char tmp[512];
+    cbm_mcp_server_t *srv = setup_snippet_server(tmp, sizeof(tmp));
+    ASSERT_NOT_NULL(srv);
+
+    char *resp =
+        cbm_mcp_server_handle(srv, "{\"jsonrpc\":\"2.0\",\"id\":93,\"method\":\"tools/call\","
+                                   "\"params\":{\"name\":\"search_code\","
+                                   "\"arguments\":{\"pattern\":\"HandleRequest|Nope\","
+                                   "\"regex\":false,\"project\":\"test-project\"}}}");
+    ASSERT_NOT_NULL(resp);
+    ASSERT_NOT_NULL(strstr(resp, "warnings"));   /* surfaced, not silent */
+    ASSERT_NOT_NULL(strstr(resp, "regex=true")); /* the hint names the fix */
+    ASSERT_NOT_NULL(strstr(resp, "elapsed_ms")); /* timing is reported */
+    free(resp);
+
+    cleanup_snippet_dir(tmp);
+    cbm_mcp_server_free(srv);
+    PASS();
+}
+
+/* issue #272: '&' in a path / file_pattern is neutralised by the command's
+ * quoting and must no longer be rejected as "invalid characters". */
+TEST(search_code_ampersand_accepted_issue272) {
+    char tmp[512];
+    cbm_mcp_server_t *srv = setup_snippet_server(tmp, sizeof(tmp));
+    ASSERT_NOT_NULL(srv);
+
+    char *resp =
+        cbm_mcp_server_handle(srv, "{\"jsonrpc\":\"2.0\",\"id\":94,\"method\":\"tools/call\","
+                                   "\"params\":{\"name\":\"search_code\","
+                                   "\"arguments\":{\"pattern\":\"HandleRequest\","
+                                   "\"file_pattern\":\"*R&D*.go\",\"project\":\"test-project\"}}}");
+    ASSERT_NOT_NULL(resp);
+    ASSERT_TRUE(strstr(resp, "invalid characters") == NULL);
+    free(resp);
+
+    cleanup_snippet_dir(tmp);
+    cbm_mcp_server_free(srv);
+    PASS();
+}
+
 TEST(tool_detect_changes_no_project) {
     cbm_mcp_server_t *srv = cbm_mcp_server_new(NULL);
 
@@ -823,6 +900,48 @@ TEST(tool_manage_adr_get_with_existing_adr) {
     remove(adr_path);
     rmdir(adr_dir);
     rmdir(tmp_dir);
+    PASS();
+}
+
+/* issue #256: manage_adr (MCP) and the UI /api/adr endpoints must share ONE
+ * backend. A manage_adr(update) write must be readable via cbm_store_adr_get
+ * (the exact API the UI's /api/adr GET uses). */
+TEST(tool_manage_adr_unified_backend_issue256) {
+    cbm_mcp_server_t *srv = cbm_mcp_server_new(NULL);
+    ASSERT_NOT_NULL(srv);
+    cbm_store_t *st = cbm_mcp_server_store(srv);
+    ASSERT_NOT_NULL(st);
+    cbm_store_upsert_project(st, "adr-unify", "/tmp/adr-unify");
+    cbm_mcp_server_set_project(srv, "adr-unify");
+
+    /* Write via the MCP tool. */
+    char *resp = cbm_mcp_server_handle(
+        srv, "{\"jsonrpc\":\"2.0\",\"id\":120,\"method\":\"tools/call\","
+             "\"params\":{\"name\":\"manage_adr\",\"arguments\":{\"project\":\"adr-unify\","
+             "\"mode\":\"update\",\"content\":\"## PURPOSE\\nUnified ADR backend.\\n\"}}}");
+    ASSERT_NOT_NULL(resp);
+    ASSERT_NOT_NULL(strstr(resp, "updated"));
+    free(resp);
+
+    /* Read DIRECTLY via the store API the UI /api/adr uses — must see it. */
+    cbm_adr_t adr;
+    memset(&adr, 0, sizeof(adr));
+    ASSERT_EQ(cbm_store_adr_get(st, "adr-unify", &adr), CBM_STORE_OK);
+    ASSERT_NOT_NULL(adr.content);
+    ASSERT_NOT_NULL(strstr(adr.content, "Unified ADR backend."));
+    cbm_store_adr_free(&adr);
+
+    /* And manage_adr(get) round-trips the same content. */
+    resp = cbm_mcp_server_handle(
+        srv, "{\"jsonrpc\":\"2.0\",\"id\":121,\"method\":\"tools/call\","
+             "\"params\":{\"name\":\"manage_adr\",\"arguments\":{\"project\":\"adr-unify\","
+             "\"mode\":\"get\"}}}");
+    ASSERT_NOT_NULL(resp);
+    ASSERT_NOT_NULL(strstr(resp, "Unified ADR backend."));
+    ASSERT_NULL(strstr(resp, "isError"));
+    free(resp);
+
+    cbm_mcp_server_free(srv);
     PASS();
 }
 
@@ -1937,9 +2056,13 @@ SUITE(mcp) {
     RUN_TEST(tool_search_code_missing_pattern);
     RUN_TEST(tool_search_code_no_project);
     RUN_TEST(search_code_multi_word);
+    RUN_TEST(search_code_invalid_regex_errors_issue283);
+    RUN_TEST(search_code_literal_pipe_warns_issue282);
+    RUN_TEST(search_code_ampersand_accepted_issue272);
     RUN_TEST(tool_detect_changes_no_project);
     RUN_TEST(tool_manage_adr_no_project);
     RUN_TEST(tool_manage_adr_get_with_existing_adr);
+    RUN_TEST(tool_manage_adr_unified_backend_issue256);
     RUN_TEST(tool_ingest_traces_basic);
     RUN_TEST(tool_ingest_traces_empty);
 

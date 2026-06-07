@@ -1682,13 +1682,8 @@ static int write_one_table(write_db_ctx_t *w, uint32_t *root, const void *items,
     return 0;
 }
 
-/* Adapter functions for write_one_table */
-static uint8_t *adapt_build_node(const void *items, int i, int *out_len) {
-    return build_node_record(&((const CBMDumpNode *)items)[i], out_len);
-}
-static int64_t adapt_node_id(const void *items, int i) {
-    return ((const CBMDumpNode *)items)[i].id;
-}
+/* Adapter functions for write_one_table (nodes are written via the streaming
+ * PageBuilder in cbm_writer_append_nodes, so no node adapter is needed here). */
 static uint8_t *adapt_build_edge(const void *items, int i, int *out_len) {
     return build_edge_record(&((const CBMDumpEdge *)items)[i], out_len);
 }
@@ -1706,28 +1701,6 @@ static uint8_t *adapt_build_token_vec(const void *items, int i, int *out_len) {
 }
 static int64_t adapt_token_vec_id(const void *items, int i) {
     return ((const CBMDumpTokenVec *)items)[i].id;
-}
-
-/* Phase 1: Write node + edge + vector data tables (streaming). */
-static int write_data_tables(write_db_ctx_t *w, uint32_t *nodes_root, uint32_t *edges_root,
-                             uint32_t *vectors_root, uint32_t *token_vecs_root) {
-    int rc;
-    rc = write_one_table(w, nodes_root, w->nodes, w->node_count, adapt_build_node, adapt_node_id);
-    if (rc != 0) {
-        return rc;
-    }
-    rc = write_one_table(w, edges_root, w->edges, w->edge_count, adapt_build_edge, adapt_edge_id);
-    if (rc != 0) {
-        return rc;
-    }
-    rc = write_one_table(w, vectors_root, w->vectors, w->vector_count, adapt_build_vector,
-                         adapt_vector_id);
-    if (rc != 0) {
-        return rc;
-    }
-    rc = write_one_table(w, token_vecs_root, w->token_vecs, w->token_vec_count,
-                         adapt_build_token_vec, adapt_token_vec_id);
-    return rc;
 }
 
 /* Phase 2: Write metadata tables (projects, file_hashes, summaries, sqlite_sequence). */
@@ -1934,36 +1907,36 @@ static void parallel_sort_indexes(SortJob *nsorts, int n_node, SortJob *esorts, 
     }
 }
 
-int cbm_write_db(const char *path, const char *project, const char *root_path,
-                 const char *indexed_at, CBMDumpNode *nodes, int node_count, CBMDumpEdge *edges,
-                 int edge_count, CBMDumpVector *vectors, int vector_count,
-                 CBMDumpTokenVec *token_vecs, int token_vec_count) {
-    FILE *fp = fopen(path, "wb");
-    if (!fp) {
-        return CBM_NOT_FOUND;
-    }
+/* Write everything after the nodes table: the edges/vectors/token_vectors data
+ * tables, metadata tables, all indexes, and the sqlite_master page-1 + file
+ * header. `nodes_root` is the root of the already-written nodes table. Closes
+ * w->fp before returning (success or error). */
+static int write_db_after_nodes(write_db_ctx_t *w, uint32_t nodes_root) {
+    FILE *fp = w->fp;
+    CBMDumpNode *nodes = w->nodes;
+    int node_count = w->node_count;
+    CBMDumpEdge *edges = w->edges;
+    int edge_count = w->edge_count;
 
-    write_db_ctx_t w = {.fp = fp,
-                        .next_page = FIRST_DATA_PAGE,
-                        .project = project,
-                        .root_path = root_path,
-                        .indexed_at = indexed_at,
-                        .nodes = nodes,
-                        .node_count = node_count,
-                        .edges = edges,
-                        .edge_count = edge_count,
-                        .vectors = vectors,
-                        .vector_count = vector_count,
-                        .token_vecs = token_vecs,
-                        .token_vec_count = token_vec_count};
-
-    // Phase 1: Data tables (streaming node + edge + vector + token_vector records)
+    // Phase 1 (cont.): remaining data tables (edge + vector + token_vector records)
     CBM_PROF_START(t_data);
-    uint32_t nodes_root;
     uint32_t edges_root;
     uint32_t vectors_root;
     uint32_t token_vecs_root;
-    int rc = write_data_tables(&w, &nodes_root, &edges_root, &vectors_root, &token_vecs_root);
+    int rc =
+        write_one_table(w, &edges_root, w->edges, w->edge_count, adapt_build_edge, adapt_edge_id);
+    if (rc != 0) {
+        (void)fclose(fp);
+        return rc;
+    }
+    rc = write_one_table(w, &vectors_root, w->vectors, w->vector_count, adapt_build_vector,
+                         adapt_vector_id);
+    if (rc != 0) {
+        (void)fclose(fp);
+        return rc;
+    }
+    rc = write_one_table(w, &token_vecs_root, w->token_vecs, w->token_vec_count,
+                         adapt_build_token_vec, adapt_token_vec_id);
     if (rc != 0) {
         (void)fclose(fp);
         return rc;
@@ -1976,8 +1949,8 @@ int cbm_write_db(const char *path, const char *project, const char *root_path,
     uint32_t file_hashes_root;
     uint32_t summaries_root;
     uint32_t sqlite_seq_root;
-    write_metadata_tables(&w, &projects_root, &file_hashes_root, &summaries_root, &sqlite_seq_root);
-    uint32_t next_page = w.next_page;
+    write_metadata_tables(w, &projects_root, &file_hashes_root, &summaries_root, &sqlite_seq_root);
+    uint32_t next_page = w->next_page;
     CBM_PROF_END("write_db", "2_metadata_tables", t_meta);
 
     // --- Build indexes (all sorted by key columns before writing) ---
@@ -2047,7 +2020,7 @@ int cbm_write_db(const char *path, const char *project, const char *root_path,
         // 1 row: project name
         RecordBuilder r;
         rec_init(&r);
-        rec_add_text(&r, project);
+        rec_add_text(&r, w->project);
         rec_add_int(&r, FIRST_ROWID); /* rowid */
         int plen = 0;
         uint8_t *payload = rec_finalize(&r, &plen);
@@ -2148,4 +2121,109 @@ int cbm_write_db(const char *path, const char *project, const char *root_path,
     pad_file_to_page_boundary(fp, next_page);
     (void)fclose(fp);
     return 0;
+}
+
+// --- Streaming writer (incremental bulk node-table append) ---
+
+struct cbm_db_writer {
+    write_db_ctx_t wc;       // fp + next_page carried across calls; arrays filled at finalize
+    PageBuilder nodes_pb;    // persistent nodes-table builder (leaves flush as they fill)
+    int64_t last_node_rowid; // last appended node id (prev_rowid for the next cell)
+    int64_t node_rows_written;
+    int err; // sticky error
+};
+
+cbm_db_writer_t *cbm_writer_open(const char *path) {
+    FILE *fp = fopen(path, "wb");
+    if (!fp) {
+        return NULL;
+    }
+    cbm_db_writer_t *w = (cbm_db_writer_t *)calloc(CBM_ALLOC_ONE, sizeof(*w));
+    if (!w) {
+        (void)fclose(fp);
+        return NULL;
+    }
+    w->wc.fp = fp;
+    w->wc.next_page = FIRST_DATA_PAGE;
+    /* Nodes are never page 1 (page 1 is sqlite_master, written at finalize). */
+    pb_init(&w->nodes_pb, fp, FIRST_DATA_PAGE, false);
+    return w;
+}
+
+int cbm_writer_append_nodes(cbm_db_writer_t *w, const CBMDumpNode *nodes, int count) {
+    if (!w) {
+        return CBM_NOT_FOUND;
+    }
+    if (w->err) {
+        return w->err;
+    }
+    for (int i = 0; i < count; i++) {
+        int rec_len;
+        uint8_t *rec = build_node_record(&nodes[i], &rec_len);
+        if (!rec) {
+            w->err = ERR_WRITE_FAILED;
+            return w->err;
+        }
+        /* prev_rowid is the previous node's id (0 for the very first), matching
+         * the one-shot write_one_table loop — so output is byte-identical. */
+        pb_add_table_cell_with_flush(&w->nodes_pb, nodes[i].id, rec, rec_len, w->last_node_rowid);
+        free(rec);
+        w->last_node_rowid = nodes[i].id;
+        w->node_rows_written++;
+    }
+    return 0;
+}
+
+int cbm_writer_finalize(cbm_db_writer_t *w, const char *project, const char *root_path,
+                        const char *indexed_at, CBMDumpNode *nodes, int node_count,
+                        CBMDumpEdge *edges, int edge_count, CBMDumpVector *vectors,
+                        int vector_count, CBMDumpTokenVec *token_vecs, int token_vec_count) {
+    if (!w) {
+        return CBM_NOT_FOUND;
+    }
+    int err = w->err;
+    uint32_t nodes_root = 0;
+    if (err == 0) {
+        if (w->node_rows_written == 0) {
+            pb_free(&w->nodes_pb);
+            nodes_root = write_table_btree(w->wc.fp, &w->wc.next_page, NULL, NULL, NULL, 0, false);
+        } else {
+            nodes_root = pb_finalize_table(&w->nodes_pb, &w->wc.next_page, w->last_node_rowid);
+        }
+    }
+    w->wc.project = project;
+    w->wc.root_path = root_path;
+    w->wc.indexed_at = indexed_at;
+    w->wc.nodes = nodes;
+    w->wc.node_count = node_count;
+    w->wc.edges = edges;
+    w->wc.edge_count = edge_count;
+    w->wc.vectors = vectors;
+    w->wc.vector_count = vector_count;
+    w->wc.token_vecs = token_vecs;
+    w->wc.token_vec_count = token_vec_count;
+
+    write_db_ctx_t wc = w->wc; /* value copy survives free(w) */
+    free(w);
+    if (err != 0) {
+        (void)fclose(wc.fp); /* wc is a value copy, valid after free(w) */
+        return err;
+    }
+    return write_db_after_nodes(&wc, nodes_root);
+}
+
+int cbm_write_db(const char *path, const char *project, const char *root_path,
+                 const char *indexed_at, CBMDumpNode *nodes, int node_count, CBMDumpEdge *edges,
+                 int edge_count, CBMDumpVector *vectors, int vector_count,
+                 CBMDumpTokenVec *token_vecs, int token_vec_count) {
+    /* One-shot = open + append all nodes in a single batch + finalize.
+     * Produces byte-identical output to the former monolithic writer. */
+    cbm_db_writer_t *w = cbm_writer_open(path);
+    if (!w) {
+        return CBM_NOT_FOUND;
+    }
+    (void)cbm_writer_append_nodes(w, nodes,
+                                  node_count); /* error recorded in w, handled by finalize */
+    return cbm_writer_finalize(w, project, root_path, indexed_at, nodes, node_count, edges,
+                               edge_count, vectors, vector_count, token_vecs, token_vec_count);
 }

@@ -561,6 +561,159 @@ TEST(cypher_exec_return_properties) {
     PASS();
 }
 
+/* ── Scalar / introspection functions (full-suite Tier 1) ──────── */
+
+TEST(cypher_func_labels) {
+    cbm_store_t *s = setup_cypher_store();
+    cbm_cypher_result_t r = {0};
+    int rc = cbm_cypher_execute(
+        s, "MATCH (f:Function) WHERE f.name = \"HandleOrder\" RETURN labels(f)", "test", 0, &r);
+    ASSERT_EQ(rc, 0);
+    ASSERT_EQ(r.row_count, 1);
+    ASSERT_STR_EQ(r.rows[0][0], "[\"Function\"]");
+    cbm_cypher_result_free(&r);
+    cbm_store_close(s);
+    PASS();
+}
+
+TEST(cypher_func_type) {
+    cbm_store_t *s = setup_cypher_store();
+    cbm_cypher_result_t r = {0};
+    int rc = cbm_cypher_execute(
+        s, "MATCH (f:Function)-[r:CALLS]->(g:Function) RETURN type(r) LIMIT 1", "test", 0, &r);
+    ASSERT_EQ(rc, 0);
+    ASSERT_EQ(r.row_count, 1);
+    ASSERT_STR_EQ(r.rows[0][0], "CALLS");
+    cbm_cypher_result_free(&r);
+    cbm_store_close(s);
+    PASS();
+}
+
+TEST(cypher_func_id) {
+    cbm_store_t *s = setup_cypher_store();
+    cbm_cypher_result_t r = {0};
+    int rc = cbm_cypher_execute(s, "MATCH (f:Function) WHERE f.name = \"HandleOrder\" RETURN id(f)",
+                                "test", 0, &r);
+    ASSERT_EQ(rc, 0);
+    ASSERT_EQ(r.row_count, 1);
+    /* id is a non-empty numeric string */
+    ASSERT_TRUE(r.rows[0][0][0] >= '0' && r.rows[0][0][0] <= '9');
+    cbm_cypher_result_free(&r);
+    cbm_store_close(s);
+    PASS();
+}
+
+TEST(cypher_func_keys) {
+    cbm_store_t *s = setup_cypher_store();
+    cbm_cypher_result_t r = {0};
+    int rc = cbm_cypher_execute(
+        s, "MATCH (f:Function) WHERE f.name = \"HandleOrder\" RETURN keys(f)", "test", 0, &r);
+    ASSERT_EQ(rc, 0);
+    ASSERT_EQ(r.row_count, 1);
+    ASSERT_TRUE(strstr(r.rows[0][0], "\"name\"") != NULL);
+    ASSERT_TRUE(strstr(r.rows[0][0], "\"qualified_name\"") != NULL);
+    cbm_cypher_result_free(&r);
+    cbm_store_close(s);
+    PASS();
+}
+
+TEST(cypher_func_properties) {
+    cbm_store_t *s = setup_cypher_store();
+    cbm_cypher_result_t r = {0};
+    int rc = cbm_cypher_execute(
+        s, "MATCH (f:Function) WHERE f.name = \"HandleOrder\" RETURN properties(f)", "test", 0, &r);
+    ASSERT_EQ(rc, 0);
+    ASSERT_EQ(r.row_count, 1);
+    ASSERT_EQ(r.rows[0][0][0], '{'); /* a JSON object */
+    cbm_cypher_result_free(&r);
+    cbm_store_close(s);
+    PASS();
+}
+
+TEST(cypher_func_tointeger_tofloat) {
+    cbm_store_t *s = setup_cypher_store();
+    cbm_cypher_result_t r = {0};
+    int rc = cbm_cypher_execute(s,
+                                "MATCH (f:Function) WHERE f.name = \"HandleOrder\" "
+                                "RETURN toInteger(f.start_line), toFloat(f.start_line)",
+                                "test", 0, &r);
+    ASSERT_EQ(rc, 0);
+    ASSERT_EQ(r.row_count, 1);
+    ASSERT_STR_EQ(r.rows[0][0], "10"); /* start_line = 10 */
+    ASSERT_STR_EQ(r.rows[0][1], "10");
+    cbm_cypher_result_free(&r);
+    cbm_store_close(s);
+    PASS();
+}
+
+TEST(cypher_func_size_reverse) {
+    cbm_store_t *s = setup_cypher_store();
+    cbm_cypher_result_t r = {0};
+    int rc = cbm_cypher_execute(s,
+                                "MATCH (f:Function) WHERE f.name = \"LogError\" "
+                                "RETURN size(f.name), length(f.name), reverse(f.name)",
+                                "test", 0, &r);
+    ASSERT_EQ(rc, 0);
+    ASSERT_EQ(r.row_count, 1);
+    ASSERT_STR_EQ(r.rows[0][0], "8"); /* "LogError" has 8 chars */
+    ASSERT_STR_EQ(r.rows[0][1], "8");
+    ASSERT_STR_EQ(r.rows[0][2], "rorrEgoL");
+    cbm_cypher_result_free(&r);
+    cbm_store_close(s);
+    PASS();
+}
+
+TEST(cypher_func_multiarg) {
+    cbm_store_t *s = setup_cypher_store();
+    cbm_cypher_result_t r = {0};
+    int rc = cbm_cypher_execute(s,
+                                "MATCH (f:Function) WHERE f.name = \"HandleOrder\" "
+                                "RETURN substring(f.name, 0, 6), left(f.name, 6), "
+                                "right(f.name, 5), replace(f.name, \"Order\", \"Req\"), "
+                                "coalesce(f.missing, \"fallback\")",
+                                "test", 0, &r);
+    ASSERT_EQ(rc, 0);
+    ASSERT_EQ(r.row_count, 1);
+    ASSERT_STR_EQ(r.rows[0][0], "Handle");    /* substring("HandleOrder",0,6) */
+    ASSERT_STR_EQ(r.rows[0][1], "Handle");    /* left(...,6) */
+    ASSERT_STR_EQ(r.rows[0][2], "Order");     /* right("HandleOrder",5) */
+    ASSERT_STR_EQ(r.rows[0][3], "HandleReq"); /* replace Order->Req */
+    ASSERT_STR_EQ(r.rows[0][4], "fallback");  /* coalesce: f.missing empty -> literal */
+    cbm_cypher_result_free(&r);
+    cbm_store_close(s);
+    PASS();
+}
+
+TEST(cypher_exists_no_callers) {
+    /* NOT EXISTS { (f)<-[:CALLS]-() } → functions with no CALLS caller.
+     * HandleOrder has only an incoming DEFINES edge (not CALLS), so it is the
+     * sole match — proving EXISTS is edge-type-specific (in_degree=1 here). */
+    cbm_store_t *s = setup_cypher_store();
+    cbm_cypher_result_t r = {0};
+    int rc = cbm_cypher_execute(
+        s, "MATCH (f:Function) WHERE NOT EXISTS { (f)<-[:CALLS]-() } RETURN f.name", "test", 0, &r);
+    ASSERT_EQ(rc, 0);
+    ASSERT_EQ(r.row_count, 1);
+    ASSERT_STR_EQ(r.rows[0][0], "HandleOrder");
+    cbm_cypher_result_free(&r);
+    cbm_store_close(s);
+    PASS();
+}
+
+TEST(cypher_exists_has_outgoing_calls) {
+    /* EXISTS { (f)-[:CALLS]->() } → functions that call something.
+     * HandleOrder (→ValidateOrder, →LogError) and ValidateOrder (→SubmitOrder). */
+    cbm_store_t *s = setup_cypher_store();
+    cbm_cypher_result_t r = {0};
+    int rc = cbm_cypher_execute(
+        s, "MATCH (f:Function) WHERE EXISTS { (f)-[:CALLS]->() } RETURN f.name", "test", 0, &r);
+    ASSERT_EQ(rc, 0);
+    ASSERT_EQ(r.row_count, 2);
+    cbm_cypher_result_free(&r);
+    cbm_store_close(s);
+    PASS();
+}
+
 TEST(cypher_exec_calls_relationship) {
     cbm_store_t *s = setup_cypher_store();
     cbm_cypher_result_t r = {0};
@@ -741,6 +894,152 @@ TEST(cypher_exec_distinct) {
     ASSERT_EQ(r.row_count, 1);
 
     cbm_cypher_result_free(&r);
+    cbm_store_close(s);
+    PASS();
+}
+
+/* issue #238: WITH DISTINCT must deduplicate projected rows (previously the
+ * DISTINCT keyword on WITH was parsed but silently ignored). */
+TEST(cypher_exec_with_distinct_issue238) {
+    cbm_store_t *s = setup_cypher_store();
+    cbm_cypher_result_t r = {0};
+
+    /* 4 Function nodes all share label "Function" → WITH DISTINCT collapses to
+     * one row; without dedup this returned 4. */
+    int rc = cbm_cypher_execute(s, "MATCH (f:Function) WITH DISTINCT f.label AS lbl RETURN lbl",
+                                "test", 0, &r);
+    ASSERT_EQ(rc, 0);
+    ASSERT_EQ(r.row_count, 1);
+    cbm_cypher_result_free(&r);
+
+    /* Control: without DISTINCT, all 4 rows flow through. */
+    cbm_cypher_result_t r2 = {0};
+    rc = cbm_cypher_execute(s, "MATCH (f:Function) WITH f.label AS lbl RETURN lbl", "test", 0, &r2);
+    ASSERT_EQ(rc, 0);
+    ASSERT_EQ(r2.row_count, 4);
+    cbm_cypher_result_free(&r2);
+
+    cbm_store_close(s);
+    PASS();
+}
+
+/* issue #241: label tests in WHERE clauses (openCypher `WHERE n:Label`) —
+ * previously a parse error. */
+TEST(cypher_exec_where_label_test_issue241) {
+    cbm_store_t *s = setup_cypher_store();
+
+    /* f:Function is true for all 4 Function nodes. */
+    cbm_cypher_result_t r = {0};
+    int rc =
+        cbm_cypher_execute(s, "MATCH (f:Function) WHERE f:Function RETURN f.name", "test", 0, &r);
+    ASSERT_EQ(rc, 0);
+    ASSERT_EQ(r.row_count, 4);
+    cbm_cypher_result_free(&r);
+
+    /* f:Class matches none of the functions. */
+    cbm_cypher_result_t r2 = {0};
+    rc = cbm_cypher_execute(s, "MATCH (f:Function) WHERE f:Class RETURN f.name", "test", 0, &r2);
+    ASSERT_EQ(rc, 0);
+    ASSERT_EQ(r2.row_count, 0);
+    cbm_cypher_result_free(&r2);
+
+    /* Negated label test: NOT f:Class is always true. */
+    cbm_cypher_result_t r3 = {0};
+    rc =
+        cbm_cypher_execute(s, "MATCH (f:Function) WHERE NOT f:Class RETURN f.name", "test", 0, &r3);
+    ASSERT_EQ(rc, 0);
+    ASSERT_EQ(r3.row_count, 4);
+    cbm_cypher_result_free(&r3);
+
+    cbm_store_close(s);
+    PASS();
+}
+
+/* issue #239: COUNT(DISTINCT x) — previously a parse error. */
+TEST(cypher_exec_count_distinct_issue239) {
+    cbm_store_t *s = setup_cypher_store();
+
+    /* 4 functions all share label "Function" → COUNT(DISTINCT f.label) = 1. */
+    cbm_cypher_result_t r = {0};
+    int rc =
+        cbm_cypher_execute(s, "MATCH (f:Function) RETURN count(DISTINCT f.label)", "test", 0, &r);
+    ASSERT_EQ(rc, 0);
+    ASSERT_EQ(r.row_count, 1);
+    ASSERT_STR_EQ(r.rows[0][0], "1");
+    cbm_cypher_result_free(&r);
+
+    /* Non-distinct COUNT counts all 4 occurrences. */
+    cbm_cypher_result_t r2 = {0};
+    rc = cbm_cypher_execute(s, "MATCH (f:Function) RETURN count(f.label)", "test", 0, &r2);
+    ASSERT_EQ(rc, 0);
+    ASSERT_STR_EQ(r2.rows[0][0], "4");
+    cbm_cypher_result_free(&r2);
+
+    /* DISTINCT over the 4 unique function names = 4. */
+    cbm_cypher_result_t r3 = {0};
+    rc = cbm_cypher_execute(s, "MATCH (f:Function) RETURN count(DISTINCT f.name)", "test", 0, &r3);
+    ASSERT_EQ(rc, 0);
+    ASSERT_STR_EQ(r3.rows[0][0], "4");
+    cbm_cypher_result_free(&r3);
+
+    cbm_store_close(s);
+    PASS();
+}
+
+/* issue #373: an unsupported computed expression in WITH/RETURN (an unknown
+ * function like split(...) or list indexing [..]) must FAIL LOUDLY with a clear
+ * "unsupported function" error rather than silently projecting an empty column
+ * (which looks like a valid-but-blank result and hides the real problem). */
+TEST(cypher_exec_unsupported_func_errors_issue373) {
+    cbm_store_t *s = setup_cypher_store();
+
+    cbm_cypher_result_t r = {0};
+    int rc = cbm_cypher_execute(
+        s, "MATCH (f:Function) WITH split(f.name)[0] AS top, count(*) AS c RETURN top, c", "test",
+        0, &r);
+    ASSERT_TRUE(rc != 0); /* unsupported function now fails loudly */
+    ASSERT_NOT_NULL(r.error);
+    ASSERT_TRUE(strstr(r.error, "unsupported") != NULL);
+    ASSERT_TRUE(strstr(r.error, "split") != NULL);
+    cbm_cypher_result_free(&r);
+
+    cbm_store_close(s);
+    PASS();
+}
+
+/* A recognised function still works, and an unknown one in plain RETURN errors. */
+TEST(cypher_exec_unknown_func_return_errors) {
+    cbm_store_t *s = setup_cypher_store();
+
+    cbm_cypher_result_t r = {0};
+    int rc = cbm_cypher_execute(s, "MATCH (f:Function) RETURN nosuchfunc(f.name)", "test", 0, &r);
+    ASSERT_TRUE(rc != 0);
+    ASSERT_NOT_NULL(r.error);
+    ASSERT_TRUE(strstr(r.error, "unsupported function") != NULL);
+    cbm_cypher_result_free(&r);
+
+    cbm_store_close(s);
+    PASS();
+}
+
+/* issue #242: openCypher label alternation in MATCH — (n:A|B). */
+TEST(cypher_exec_label_alternation_issue242) {
+    cbm_store_t *s = setup_cypher_store();
+
+    /* Store has 4 Function + 1 Module node → alternation seeds all 5. */
+    cbm_cypher_result_t r = {0};
+    int rc = cbm_cypher_execute(s, "MATCH (n:Function|Module) RETURN n.name", "test", 0, &r);
+    ASSERT_EQ(rc, 0);
+    ASSERT_EQ(r.row_count, 5);
+    cbm_cypher_result_free(&r);
+
+    /* Alternation with a non-existent label still returns the existing one. */
+    cbm_cypher_result_t r2 = {0};
+    rc = cbm_cypher_execute(s, "MATCH (n:Function|Class) RETURN n.name", "test", 0, &r2);
+    ASSERT_EQ(rc, 0);
+    ASSERT_EQ(r2.row_count, 4);
+    cbm_cypher_result_free(&r2);
+
     cbm_store_close(s);
     PASS();
 }
@@ -2162,6 +2461,45 @@ TEST(cypher_issue305_count_star_alias) {
     PASS();
 }
 
+/* Regression: projecting several computed/JSON properties in one row must yield
+ * DISTINCT values. node_prop previously returned a single shared static buffer,
+ * so every such column aliased the last property read — and because the search
+ * key is matched in the JSON, `loop_depth` must not be confused with its suffix
+ * `transitive_loop_depth`. Exercises the bottleneck metrics end-to-end. */
+TEST(cypher_multi_prop_projection_no_alias) {
+    cbm_store_t *s = cbm_store_open_memory();
+    cbm_store_upsert_project(s, "test", "/tmp/test");
+    cbm_node_t n = {.project = "test",
+                    .label = "Function",
+                    .name = "Hot",
+                    .qualified_name = "test.Hot",
+                    .file_path = "hot.go",
+                    .start_line = 10,
+                    .end_line = 42,
+                    .properties_json = "{\"complexity\":3,\"cognitive\":7,\"loop_count\":2,"
+                                       "\"loop_depth\":1,\"self_recursive\":false,"
+                                       "\"transitive_loop_depth\":5,\"recursive\":true}"};
+    cbm_store_upsert_node(s, &n);
+
+    cbm_cypher_result_t r = {0};
+    int rc = cbm_cypher_execute(s,
+                                "MATCH (f:Function) RETURN f.loop_depth, f.transitive_loop_depth, "
+                                "f.cognitive, f.complexity, f.start_line, f.end_line",
+                                "test", 0, &r);
+    ASSERT_EQ(rc, 0);
+    ASSERT_EQ(r.row_count, 1);
+    ASSERT_EQ(r.col_count, 6);
+    ASSERT_STR_EQ(r.rows[0][0], "1"); /* loop_depth — NOT the suffix transitive_loop_depth */
+    ASSERT_STR_EQ(r.rows[0][1], "5"); /* transitive_loop_depth */
+    ASSERT_STR_EQ(r.rows[0][2], "7"); /* cognitive */
+    ASSERT_STR_EQ(r.rows[0][3], "3"); /* complexity */
+    ASSERT_STR_EQ(r.rows[0][4], "10"); /* start_line (computed) */
+    ASSERT_STR_EQ(r.rows[0][5], "42"); /* end_line (computed) — distinct from start_line */
+    cbm_cypher_result_free(&r);
+    cbm_store_close(s);
+    PASS();
+}
+
 /* ══════════════════════════════════════════════════════════════════ */
 
 SUITE(cypher) {
@@ -2204,6 +2542,17 @@ SUITE(cypher) {
     RUN_TEST(cypher_exec_where_contains);
     RUN_TEST(cypher_exec_where_starts_with);
     RUN_TEST(cypher_exec_return_properties);
+    RUN_TEST(cypher_func_labels);
+    RUN_TEST(cypher_func_type);
+    RUN_TEST(cypher_func_id);
+    RUN_TEST(cypher_func_keys);
+    RUN_TEST(cypher_func_properties);
+    RUN_TEST(cypher_func_tointeger_tofloat);
+    RUN_TEST(cypher_func_size_reverse);
+    RUN_TEST(cypher_func_multiarg);
+    RUN_TEST(cypher_multi_prop_projection_no_alias);
+    RUN_TEST(cypher_exists_no_callers);
+    RUN_TEST(cypher_exists_has_outgoing_calls);
     RUN_TEST(cypher_exec_calls_relationship);
     RUN_TEST(cypher_exec_calls_with_where);
     RUN_TEST(cypher_exec_inbound);
@@ -2216,6 +2565,12 @@ SUITE(cypher) {
     RUN_TEST(cypher_exec_where_numeric);
     /* Go test ports */
     RUN_TEST(cypher_exec_distinct);
+    RUN_TEST(cypher_exec_with_distinct_issue238);
+    RUN_TEST(cypher_exec_where_label_test_issue241);
+    RUN_TEST(cypher_exec_label_alternation_issue242);
+    RUN_TEST(cypher_exec_count_distinct_issue239);
+    RUN_TEST(cypher_exec_unsupported_func_errors_issue373);
+    RUN_TEST(cypher_exec_unknown_func_return_errors);
     RUN_TEST(cypher_exec_inline_props);
     RUN_TEST(cypher_parse_where_starts_with);
     RUN_TEST(cypher_parse_where_contains);
