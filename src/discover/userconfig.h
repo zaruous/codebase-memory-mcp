@@ -10,7 +10,13 @@
  * skipped (fail-open). Missing files are silently ignored.
  *
  * Format:
- *   {"extra_extensions": {".blade.php": "php", ".mjs": "javascript"}}
+ *   {
+ *     "extra_extensions": {".blade.php": "php", ".mjs": "javascript"},
+ *     "max_file_size_mb": 5
+ *   }
+ *
+ * max_file_size_mb: files larger than this are skipped during discovery.
+ *   0 = no limit. Default: CBM_DEFAULT_MAX_FILE_SIZE_MB (5 MB).
  *
  * The language string matching is case-insensitive.
  */
@@ -26,9 +32,13 @@ typedef struct {
     CBMLanguage lang; /* resolved language enum */
 } cbm_userext_t;
 
+/* Default max file size (5 MB) applied when config does not specify a value. */
+#define CBM_DEFAULT_MAX_FILE_SIZE_MB 5
+
 typedef struct {
-    cbm_userext_t *entries; /* heap-allocated array */
-    int count;              /* number of entries */
+    cbm_userext_t *entries;      /* heap-allocated array */
+    int count;                   /* number of entries */
+    int64_t max_file_size_bytes; /* 0 = no limit; default CBM_DEFAULT_MAX_FILE_SIZE_MB */
 } cbm_userconfig_t;
 
 /* ── API ────────────────────────────────────────────────────────── */

@@ -225,12 +225,16 @@ static int parse_extra_extensions(yyjson_val *root, cbm_userext_t **entries, int
     return 0;
 }
 
+/* Sentinel: max_file_size not set by any config file yet. */
+#define MAX_FILE_SIZE_NOT_SET ((int64_t)-1)
+
 /*
- * Read a JSON file and parse extra_extensions from it.
+ * Read a JSON file and parse extra_extensions + max_file_size_mb from it.
  * Silently ignores missing files. Logs warnings for corrupt JSON.
  * Returns 0 on success (or absent file), -1 on alloc failure.
  */
-static int load_config_file(const char *path, cbm_userext_t **entries, int *count) {
+static int load_config_file(const char *path, cbm_userext_t **entries, int *count,
+                            int64_t *out_max_file_size_bytes) {
     FILE *f = fopen(path, "rb");
     if (!f) {
         return 0; /* file absent — silently ignore */
@@ -277,6 +281,25 @@ static int load_config_file(const char *path, cbm_userext_t **entries, int *coun
 
     yyjson_val *root = yyjson_doc_get_root(doc);
     int rc = parse_extra_extensions(root, entries, count, path);
+
+    /* Parse max_file_size_mb — project file overwrites global if present */
+    if (rc == 0 && yyjson_is_obj(root)) {
+        yyjson_val *sz = yyjson_obj_get(root, "max_file_size_mb");
+        if (sz) {
+            if (yyjson_is_int(sz)) {
+                int64_t mb = yyjson_get_sint(sz);
+                if (mb < 0) {
+                    cbm_log_warn("userconfig.bad_max_file_size", "path", path);
+                } else {
+                    *out_max_file_size_bytes =
+                        mb == 0 ? 0 : mb * (int64_t)CBM_SZ_1K * (int64_t)CBM_SZ_1K;
+                }
+            } else {
+                cbm_log_warn("userconfig.bad_max_file_size", "path", path);
+            }
+        }
+    }
+
     yyjson_doc_free(doc);
     return rc;
 }
@@ -291,6 +314,7 @@ cbm_userconfig_t *cbm_userconfig_load(const char *repo_path) {
 
     cbm_userext_t *entries = NULL;
     int count = 0;
+    int64_t max_file_size_bytes = MAX_FILE_SIZE_NOT_SET; /* sentinel: not set by any config */
 
     /* ── Step 1: Load global config ── */
     enum { PATH_BUF_SZ = 1280 };
@@ -299,7 +323,7 @@ cbm_userconfig_t *cbm_userconfig_load(const char *repo_path) {
     char global_path[PATH_BUF_SZ];
     snprintf(global_path, sizeof(global_path), "%s/codebase-memory-mcp/config.json", cfg_fallback);
 
-    if (load_config_file(global_path, &entries, &count) != 0) {
+    if (load_config_file(global_path, &entries, &count, &max_file_size_bytes) != 0) {
         for (int i = 0; i < count; i++) {
             free(entries[i].ext);
         }
@@ -315,7 +339,7 @@ cbm_userconfig_t *cbm_userconfig_load(const char *repo_path) {
         char project_path[PATH_BUF_SZ];
         snprintf(project_path, sizeof(project_path), "%s/.codebase-memory.json", repo_path);
 
-        if (load_config_file(project_path, &entries, &count) != 0) {
+        if (load_config_file(project_path, &entries, &count, &max_file_size_bytes) != 0) {
             /* Free already-allocated entries */
             for (int i = 0; i < count; i++) {
                 free(entries[i].ext);
@@ -360,6 +384,13 @@ cbm_userconfig_t *cbm_userconfig_load(const char *repo_path) {
 
     cfg->entries = entries;
     cfg->count = count;
+
+    /* Apply max_file_size: config value wins; fall back to built-in default */
+    cfg->max_file_size_bytes =
+        (max_file_size_bytes == MAX_FILE_SIZE_NOT_SET)
+            ? (int64_t)CBM_DEFAULT_MAX_FILE_SIZE_MB * (int64_t)CBM_SZ_1K * (int64_t)CBM_SZ_1K
+            : max_file_size_bytes;
+
     return cfg;
 }
 
