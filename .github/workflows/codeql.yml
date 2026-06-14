@@ -3,10 +3,16 @@ name: CodeQL SAST
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
 
 permissions:
   security-events: write
   contents: read
+
+concurrency:
+  group: codeql-${{ github.ref }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
 
 jobs:
   analyze:

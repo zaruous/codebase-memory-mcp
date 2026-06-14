@@ -20,6 +20,8 @@
 #include "lsp/py_lsp.h"
 #include "lsp/ts_lsp.h"
 #include "lsp/php_lsp.h"
+#include "lsp/java_lsp.h"
+#include "lsp/kotlin_lsp.h"
 #include "graph_buffer/graph_buffer.h"
 #include "foundation/constants.h"
 #include "foundation/hash_table.h"
@@ -287,6 +289,9 @@ bool cbm_pxc_has_cross_lsp(CBMLanguage lang) {
     case CBM_LANG_TYPESCRIPT:
     case CBM_LANG_TSX:
     case CBM_LANG_PHP:
+    case CBM_LANG_CSHARP: /* tier-2 prebuilt registry path (pass_parallel.c) */
+    case CBM_LANG_JAVA:   /* fallback cbm_pxc_run_one path */
+    case CBM_LANG_KOTLIN: /* fallback cbm_pxc_run_one path */
         return true;
     default:
         return false;
@@ -388,6 +393,14 @@ void cbm_pxc_run_one(CBMLanguage lang, CBMFileResult *r, const char *source, int
     case CBM_LANG_PHP:
         cbm_run_php_lsp_cross(&scratch, source, source_len, module_qn, defs, def_count, imp_names,
                               imp_qns, imp_count, tree, &out);
+        break;
+    case CBM_LANG_JAVA:
+        cbm_run_java_lsp_cross(&scratch, source, source_len, module_qn, defs, def_count, imp_names,
+                               imp_qns, imp_count, tree, &out);
+        break;
+    case CBM_LANG_KOTLIN:
+        cbm_run_kotlin_lsp_cross(&scratch, source, source_len, module_qn, defs, def_count,
+                                 imp_names, imp_qns, imp_count, tree, &out);
         break;
     default:
         break;

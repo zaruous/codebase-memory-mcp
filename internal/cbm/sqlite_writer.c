@@ -1051,6 +1051,58 @@ static bool pb_ensure_leaf_cap(PageBuilder *pb) {
 //   max_local = usable - 35 = 65501
 //   min_local = (usable - 12) * 32 / 255 - 23 = 8199  (C integer arithmetic, same as SQLite)
 #define TABLE_OVERFLOW_MAX_LOCAL 65501
+
+// SQLite index B-tree local-payload thresholds for PAGE_SIZE=65536, reserved=0:
+//   X (max local) = ((U-12)*64/255) - 23 = 16422
+//   M (min local) = ((U-12)*32/255) - 23 = 8199
+// An index cell whose payload exceeds X MUST spill to overflow pages; storing
+// it fully inline makes SQLite read key bytes as an overflow page number
+// (integrity_check: "invalid page number", name lookups silently miss — seen
+// on elasticsearch's very long Section names in idx_nodes_name).
+#define INDEX_OVERFLOW_MAX_LOCAL 16422
+#define INDEX_OVERFLOW_MIN_LOCAL 8199
+
+// Read a SQLite varint (1-9 bytes). Returns bytes consumed.
+static int get_varint(const uint8_t *buf, uint64_t *out) {
+    uint64_t v = 0;
+    for (int i = 0; i < 8; i++) {
+        v = (v << 7) | (uint64_t)(buf[i] & 0x7f);
+        if ((buf[i] & 0x80) == 0) {
+            *out = v;
+            return i + 1;
+        }
+    }
+    v = (v << 8) | (uint64_t)buf[8];
+    *out = v;
+    return 9;
+}
+
+// If an index cell's payload exceeds X, rewrite it to spill the tail to
+// overflow pages: varint(payload_len) + payload[0..local) + u32(first_ovfl).
+// Returns the (possibly new, malloc'd) cell; frees the original when replaced.
+static uint8_t *overflowize_index_cell(FILE *fp, uint32_t *next_page, uint8_t *cell,
+                                       int *cell_len) {
+    uint64_t plen = 0;
+    int vlen = get_varint(cell, &plen);
+    if ((int64_t)plen <= INDEX_OVERFLOW_MAX_LOCAL) {
+        return cell;
+    }
+    int64_t per_ovfl = (int64_t)CBM_PAGE_SIZE - BTREE_PTR_SIZE;
+    int64_t k = INDEX_OVERFLOW_MIN_LOCAL + (((int64_t)plen - INDEX_OVERFLOW_MIN_LOCAL) % per_ovfl);
+    int local = (k <= INDEX_OVERFLOW_MAX_LOCAL) ? (int)k : INDEX_OVERFLOW_MIN_LOCAL;
+    uint32_t first_ovfl =
+        write_overflow_pages(fp, next_page, cell + vlen + local, (int)plen - local);
+    int nlen = vlen + local + BTREE_PTR_SIZE;
+    uint8_t *data = (uint8_t *)malloc((size_t)nlen);
+    if (!data) {
+        return cell; /* fall back to the (broken) inline form on OOM */
+    }
+    memcpy(data, cell, (size_t)(vlen + local));
+    put_u32(data + vlen + local, first_ovfl);
+    free(cell);
+    *cell_len = nlen;
+    return data;
+}
 #define TABLE_OVERFLOW_MIN_LOCAL 8199
 
 // Add a table cell to the PageBuilder, flushing leaf pages as needed.
@@ -1207,6 +1259,14 @@ static uint32_t write_index_btree(FILE *fp, uint32_t *next_page, uint8_t **cells
                                   int count) {
     if (count == 0) {
         return write_empty_index_leaf(fp, next_page);
+    }
+
+    /* Spill oversized index payloads to overflow pages BEFORE page building so
+     * every cell added below is within the local-payload limit (see
+     * INDEX_OVERFLOW_MAX_LOCAL). Overflow pages are allocated from *next_page
+     * ahead of the leaf pages, which is fine — page order is arbitrary. */
+    for (int i = 0; i < count; i++) {
+        cells[i] = overflowize_index_cell(fp, next_page, cells[i], &cell_lens[i]);
     }
 
     PageBuilder pb;

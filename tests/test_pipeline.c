@@ -11,6 +11,7 @@
 #include "pipeline/pipeline.h"
 #include "pipeline/pipeline_internal.h"
 #include "store/store.h"
+#include <yyjson/yyjson.h> // properties-JSON validity (oversized-props regression)
 
 #include <stdlib.h>
 #include <string.h>
@@ -461,6 +462,165 @@ TEST(pipeline_definitions_properties) {
     }
 
     cbm_store_free_nodes(funcs, func_count);
+    cbm_store_close(s);
+    cbm_pipeline_free(p);
+    teardown_test_repo();
+    PASS();
+}
+
+/* Node properties must remain VALID JSON even when a definition's serialized
+ * properties exceed the fixed 2 KB build buffer. Found on the Linux kernel:
+ * 135 nodes (50-param functions with struct-typed signatures) had properties
+ * truncated mid-string at 2047 bytes — malformed JSON that aborts EVERY
+ * json_extract()-based consumer (arch_entry_points, partial indexes, user
+ * Cypher on properties). Oversized optional fields must be dropped whole,
+ * never cut mid-value. */
+TEST(pipeline_def_props_valid_json_when_oversized) {
+    if (setup_test_repo() != 0) {
+        FAIL("failed to create temp dir");
+    }
+
+    /* Sweep of C functions with growing signatures. The corruption fires only
+     * when the serialized position lands in a narrow window just under the
+     * buffer margin as the param_types array starts — the array is then cut
+     * mid-item (`"param_types":["enum`), exactly the kernel failure shape.
+     * Sweeping 10..69 params deterministically hits the window (pre-fix:
+     * sweep_fn_30 -> 2047-byte malformed properties). ONE FUNCTION PER FILE so
+     * the file count exceeds MIN_FILES_FOR_PARALLEL (50) and the test covers
+     * the PARALLEL pipeline's duplicated props builder (pass_parallel.c) — the
+     * path large repos take; the serial twin lives in pass_definitions.c. */
+    for (int n = 10; n < 70; n++) {
+        char path[512];
+        snprintf(path, sizeof(path), "%s/sweep_%02d.c", g_tmpdir, n);
+        FILE *f = fopen(path, "w");
+        if (!f) {
+            teardown_test_repo();
+            FAIL("failed to write sweep file");
+        }
+        fprintf(f, "int sweep_fn_%02d(", n);
+        for (int i = 0; i < n; i++) {
+            fprintf(f, "%sstruct long_struct_type_name_padding_padding_%02d *par_%02d",
+                    i ? ", " : "", i, i);
+        }
+        fprintf(f, ") { return 0; }\n");
+        fclose(f);
+    }
+
+    /* Multi-line parameter declarations: param_types items then carry raw
+     * newline/tab bytes from the source slice. The array appender's inline
+     * escape loop only handled quote/backslash, so the raw control bytes made
+     * the JSON invalid (118 Linux-kernel rows of this shape). */
+    {
+        char path[512];
+        snprintf(path, sizeof(path), "%s/sweep_nl.c", g_tmpdir);
+        FILE *f = fopen(path, "w");
+        if (!f) {
+            teardown_test_repo();
+            FAIL("failed to write sweep_nl.c");
+        }
+        fprintf(f, "int sweep_fn_nl(struct\n\t\t\t\treally_long_struct_name *a,\n"
+                   "          enum\n\tweird_enum b) { return 0; }\n");
+        fclose(f);
+    }
+
+    char db_path[512];
+    snprintf(db_path, sizeof(db_path), "%s/test_huge_props.db", g_tmpdir);
+    cbm_pipeline_t *p = cbm_pipeline_new(g_tmpdir, db_path, CBM_MODE_FULL);
+    ASSERT_NOT_NULL(p);
+    ASSERT_EQ(cbm_pipeline_run(p), 0);
+
+    cbm_store_t *s = cbm_store_open_path(db_path);
+    ASSERT_NOT_NULL(s);
+    const char *project = cbm_pipeline_project_name(p);
+
+    cbm_node_t *funcs = NULL;
+    int func_count = 0;
+    ASSERT_EQ(cbm_store_find_nodes_by_label(s, project, "Function", &funcs, &func_count),
+              CBM_STORE_OK);
+    int checked = 0;
+    for (int i = 0; i < func_count; i++) {
+        if (strncmp(funcs[i].name, "sweep_fn_", 9) != 0) {
+            continue;
+        }
+        ASSERT_NOT_NULL(funcs[i].properties_json);
+        yyjson_doc *doc =
+            yyjson_read(funcs[i].properties_json, strlen(funcs[i].properties_json), 0);
+        if (!doc) {
+            printf("    INVALID properties JSON for %s (%zu bytes): ...%s\n", funcs[i].name,
+                   strlen(funcs[i].properties_json),
+                   funcs[i].properties_json + (strlen(funcs[i].properties_json) > 60
+                                                   ? strlen(funcs[i].properties_json) - 60
+                                                   : 0));
+        }
+        ASSERT_NOT_NULL(doc); /* valid JSON for EVERY sweep size */
+        yyjson_doc_free(doc);
+        checked++;
+    }
+    ASSERT_EQ(checked, 61); /* all sweep functions present (60 sizes + nl case) */
+
+    cbm_store_free_nodes(funcs, func_count);
+    cbm_store_close(s);
+    cbm_pipeline_free(p);
+    teardown_test_repo();
+    PASS();
+}
+
+/* Edge properties must be VALID JSON. Decorator source text (quotes, raw
+ * newlines: @register.tag("block"), multi-line @override_settings) was
+ * interpolated raw into the DECORATES properties — django produced 3826
+ * malformed edges, and any json_extract-based consumer (including the
+ * url_path_gen generated-column evaluation during PRAGMA integrity_check)
+ * aborts on them. Usage/call emit sites had the same hole for sliced source
+ * text. */
+TEST(pipeline_edge_props_valid_json) {
+    if (setup_test_repo() != 0) {
+        FAIL("failed to create temp dir");
+    }
+    char path[512];
+    snprintf(path, sizeof(path), "%s/deco.py", g_tmpdir);
+    FILE *f = fopen(path, "w");
+    if (!f) {
+        teardown_test_repo();
+        FAIL("failed to write deco.py");
+    }
+    fprintf(f, "from x import register\n"
+               "@register.tag(\"block\")\n"
+               "def do_block(parser):\n"
+               "    return parser\n"
+               "@register.tag(\"extends\")\n"
+               "def do_extends(parser):\n"
+               "    return parser\n");
+    fclose(f);
+
+    char db_path[512];
+    snprintf(db_path, sizeof(db_path), "%s/test_edge_props.db", g_tmpdir);
+    cbm_pipeline_t *p = cbm_pipeline_new(g_tmpdir, db_path, CBM_MODE_FULL);
+    ASSERT_NOT_NULL(p);
+    ASSERT_EQ(cbm_pipeline_run(p), 0);
+
+    cbm_store_t *s = cbm_store_open_path(db_path);
+    ASSERT_NOT_NULL(s);
+    const char *project = cbm_pipeline_project_name(p);
+
+    cbm_edge_t *edges = NULL;
+    int edge_count = 0;
+    ASSERT_EQ(cbm_store_find_edges_by_type(s, project, "DECORATES", &edges, &edge_count),
+              CBM_STORE_OK);
+    ASSERT_GT(edge_count, 0); /* the decorators must produce DECORATES edges */
+    for (int i = 0; i < edge_count; i++) {
+        const char *pj = edges[i].properties_json;
+        if (!pj) {
+            continue;
+        }
+        yyjson_doc *doc = yyjson_read(pj, strlen(pj), 0);
+        if (!doc) {
+            printf("    INVALID edge properties JSON: %.80s\n", pj);
+        }
+        ASSERT_NOT_NULL(doc);
+        yyjson_doc_free(doc);
+    }
+
+    cbm_store_free_edges(edges, edge_count);
     cbm_store_close(s);
     cbm_pipeline_free(p);
     teardown_test_repo();
@@ -5531,6 +5691,8 @@ SUITE(pipeline) {
     RUN_TEST(pipeline_definitions_function_nodes);
     RUN_TEST(pipeline_definitions_defines_edges);
     RUN_TEST(pipeline_definitions_properties);
+    RUN_TEST(pipeline_def_props_valid_json_when_oversized);
+    RUN_TEST(pipeline_edge_props_valid_json);
     /* Complexity propagation pass (Tier B) */
     RUN_TEST(pipeline_complexity_transitive_loop_depth);
     /* Calls pass */

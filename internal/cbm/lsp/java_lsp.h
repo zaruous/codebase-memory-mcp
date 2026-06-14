@@ -33,12 +33,12 @@
 #include "scope.h"
 #include "type_registry.h"
 #include "../cbm.h"
-#include "go_lsp.h"  /* CBMLSPDef, CBMResolvedCallArray reused across languages */
+#include "go_lsp.h" /* CBMLSPDef, CBMResolvedCallArray reused across languages */
 
 /* Java `use`-style import kinds. Mirrors PHP's enum with Java semantics. */
 enum {
-    CBM_JAVA_IMPORT_TYPE      = 0, /* import com.foo.Bar; — type import */
-    CBM_JAVA_IMPORT_STATIC    = 1, /* import static com.foo.Bar.method; */
+    CBM_JAVA_IMPORT_TYPE = 0,      /* import com.foo.Bar; — type import */
+    CBM_JAVA_IMPORT_STATIC = 1,    /* import static com.foo.Bar.method; */
     CBM_JAVA_IMPORT_ON_DEMAND = 2, /* import com.foo.*; — package on-demand */
     CBM_JAVA_IMPORT_STATIC_OD = 3, /* import static com.foo.Bar.*; */
 };
@@ -72,10 +72,10 @@ typedef struct {
     int import_cap;
 
     /* Current enclosing context. */
-    const char *enclosing_method_qn;  /* QN of the nearest method/ctor */
-    const char *enclosing_class_qn;   /* QN of the nearest class/interface/enum */
-    const char *enclosing_super_qn;   /* QN of the immediate superclass (NULL ⇒ Object) */
-    const char *enclosing_class_short; /* short name of enclosing class — for "this" + ctor */
+    const char *enclosing_method_qn;    /* QN of the nearest method/ctor */
+    const char *enclosing_class_qn;     /* QN of the nearest class/interface/enum */
+    const char *enclosing_super_qn;     /* QN of the immediate superclass (NULL ⇒ Object) */
+    const char *enclosing_class_short;  /* short name of enclosing class — for "this" + ctor */
     const char **enclosing_class_stack; /* nested-class stack (enclosing_class_qn at each depth) */
     int enclosing_class_depth;
     int enclosing_class_cap;
@@ -86,6 +86,7 @@ typedef struct {
     /* Recursion guards. */
     int eval_depth;
     int statement_depth;
+    int walk_depth; /* java_resolve_calls_in_node self-recursion (AST nesting) */
 
     /* Debug mode (CBM_LSP_DEBUG env). */
     bool debug;
@@ -94,8 +95,8 @@ typedef struct {
 /* ── Initialization / configuration ───────────────────────────────── */
 
 void java_lsp_init(JavaLSPContext *ctx, CBMArena *arena, const char *source, int source_len,
-                   const CBMTypeRegistry *registry, const char *package_name,
-                   const char *module_qn, CBMResolvedCallArray *out);
+                   const CBMTypeRegistry *registry, const char *package_name, const char *module_qn,
+                   CBMResolvedCallArray *out);
 
 void java_lsp_add_import(JavaLSPContext *ctx, const char *local_name, const char *target_qn,
                          int kind);
@@ -128,7 +129,7 @@ const CBMRegisteredFunc *java_lookup_method(JavaLSPContext *ctx, const char *cla
 /* Lookup a field on a class, walking the super-chain. Returns the field's
  * type, or cbm_type_unknown() on miss. */
 const CBMType *java_lookup_field_type(JavaLSPContext *ctx, const char *class_qn,
-                                       const char *field_name);
+                                      const char *field_name);
 
 /* ── Top-level entry points ───────────────────────────────────────── */
 

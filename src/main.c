@@ -13,6 +13,7 @@
  * Watcher runs in a background thread, polling for git changes.
  * HTTP UI server (optional) runs in a background thread on localhost.
  */
+#include "cbm.h" // cbm_alloc_init — bind 3rd-party allocators to mimalloc before any sqlite/git init
 #include "mcp/mcp.h"
 #include "watcher/watcher.h"
 #include "pipeline/pipeline.h"
@@ -384,6 +385,13 @@ static void setup_signal_handlers(void) {
 }
 
 int main(int argc, char **argv) {
+    /* Defense-in-depth: bind tree-sitter, sqlite3, and libgit2 to mimalloc so a
+     * correct binary does not rely on the fragile MI_OVERRIDE symbol override
+     * (#424). MUST be the VERY FIRST statement: SQLITE_CONFIG_MALLOC has to run
+     * before the first sqlite3_open* (cbm_mcp_server_new → cbm_store_open_memory
+     * below opens sqlite early), else sqlite3_config returns SQLITE_MISUSE and
+     * the bind is silently ignored. No-op in the test build. */
+    cbm_alloc_init();
     cbm_profile_init(); /* reads CBM_PROFILE env var, gates all prof macros */
     /* CBM_LOG_LEVEL support — distilled from #414 (closes #413). Apply before
      * the first log statement so the configured level governs all output. */

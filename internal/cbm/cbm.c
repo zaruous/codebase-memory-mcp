@@ -16,6 +16,13 @@
 #include "foundation/compat.h"
 #include "tree_sitter/api.h" // TSParser, TSNode, TSTree, TSInput, TSLanguage, TSPoint, TSParseOptions, TSParseState
 #include "foundation/constants.h"
+#include "mimalloc.h" // mi_malloc/mi_calloc/mi_realloc/mi_free/mi_usable_size — bind 3rd-party allocators (#424)
+#if defined(CBM_BIND_TS_ALLOCATOR) && CBM_BIND_TS_ALLOCATOR
+#include "sqlite3.h" // sqlite3_mem_methods, sqlite3_config, SQLITE_CONFIG_MALLOC — bind sqlite to mimalloc
+#if defined(HAVE_LIBGIT2)
+#include <git2.h> // git_allocator, git_libgit2_opts, GIT_OPT_SET_ALLOCATOR — bind libgit2 to mimalloc
+#endif
+#endif
 #include <stdint.h> // uint32_t, uint64_t, int64_t
 #include <stdlib.h>
 #include <string.h>
@@ -231,6 +238,122 @@ static TSParser *get_thread_parser(const TSLanguage *ts_lang, CBMLanguage lang) 
     return tl_parser;
 }
 
+// --- Allocator binding (defense-in-depth, #424) ---
+
+/* Bind tree-sitter, sqlite3, and libgit2 to mimalloc explicitly so a correct
+ * binary does NOT depend on the fragile MI_OVERRIDE symbol override. Under
+ * MI_OVERRIDE=1 — particularly the Windows static-MinGW link with
+ * --allow-multiple-definition — `malloc`/`free` can resolve to DIFFERENT
+ * allocators (mimalloc vs the CRT) inside third-party libs, so a block
+ * allocated by mimalloc gets freed by the CRT (or vice-versa), corrupting the
+ * heap freelist (#424). Binding each library through one explicit allocator
+ * eliminates that mismatch class generically, on every platform.
+ *
+ * Guarded to the production build (CBM_BIND_TS_ALLOCATOR=1, which CFLAGS_PROD
+ * defines alongside MI_OVERRIDE=1). The test build is CRT + ASan, where binding
+ * to mimalloc would mismatch ASan/CRT frees — there these binds compile to
+ * no-ops and the build stays unchanged. */
+
+#if defined(CBM_BIND_TS_ALLOCATOR) && CBM_BIND_TS_ALLOCATOR
+#include <assert.h>
+
+/* sqlite3 mem methods backed by mimalloc. sqlite's xMalloc/xRealloc/xSize use
+ * `int` sizes; wrap with size_t casts. xRoundup rounds to an 8-byte boundary
+ * (sqlite requires 8-byte-aligned roundup, and mimalloc honors that alignment).
+ * Field order matches struct sqlite3_mem_methods exactly:
+ * xMalloc, xFree, xRealloc, xSize, xRoundup, xInit, xShutdown, pAppData. */
+static void *cbm_sqlite_malloc(int n) {
+    return mi_malloc((size_t)n);
+}
+static void cbm_sqlite_free(void *p) {
+    mi_free(p);
+}
+static void *cbm_sqlite_realloc(void *p, int n) {
+    return mi_realloc(p, (size_t)n);
+}
+static int cbm_sqlite_size(void *p) {
+    return (int)mi_usable_size(p);
+}
+static int cbm_sqlite_roundup(int n) {
+    return (n + 7) & ~7; /* round up to 8-byte boundary */
+}
+static int cbm_sqlite_meminit(void *appdata) {
+    (void)appdata;
+    return SQLITE_OK;
+}
+static void cbm_sqlite_memshutdown(void *appdata) {
+    (void)appdata;
+}
+
+#if defined(HAVE_LIBGIT2)
+/* libgit2 git_allocator backed by mimalloc. The struct (current libgit2) has
+ * exactly three members: gmalloc(size_t,file,line), grealloc(ptr,size,file,line),
+ * gfree(ptr). The file/line args are ignored. */
+static void *cbm_git_malloc(size_t n, const char *file, int line) {
+    (void)file;
+    (void)line;
+    return mi_malloc(n);
+}
+static void *cbm_git_realloc(void *ptr, size_t size, const char *file, int line) {
+    (void)file;
+    (void)line;
+    return mi_realloc(ptr, size);
+}
+static void cbm_git_free(void *ptr) {
+    mi_free(ptr);
+}
+#endif /* HAVE_LIBGIT2 */
+#endif /* CBM_BIND_TS_ALLOCATOR */
+
+void cbm_alloc_init(void) {
+#if defined(CBM_BIND_TS_ALLOCATOR) && CBM_BIND_TS_ALLOCATOR
+    static int alloc_bound = 0; /* single-threaded startup; plain int is fine */
+    if (alloc_bound) {
+        return;
+    }
+    alloc_bound = 1;
+
+    /* tree-sitter runtime (was previously bound in cbm_init; consolidated here). */
+    ts_set_allocator(mi_malloc, mi_calloc, mi_realloc, mi_free);
+
+    /* sqlite3. SQLITE_CONFIG_MALLOC MUST run before sqlite3_initialize / the
+     * first sqlite3_open* — otherwise sqlite3_config returns SQLITE_MISUSE
+     * silently and the binding is ignored. cbm_alloc_init() runs as the very
+     * first statement of main(), before cbm_mcp_server_new → cbm_store_open*. */
+    static sqlite3_mem_methods cbm_sqlite_mem = {
+        cbm_sqlite_malloc,      /* xMalloc */
+        cbm_sqlite_free,        /* xFree */
+        cbm_sqlite_realloc,     /* xRealloc */
+        cbm_sqlite_size,        /* xSize */
+        cbm_sqlite_roundup,     /* xRoundup */
+        cbm_sqlite_meminit,     /* xInit */
+        cbm_sqlite_memshutdown, /* xShutdown */
+        NULL,                   /* pAppData */
+    };
+    int sqlite_rc = sqlite3_config(SQLITE_CONFIG_MALLOC, &cbm_sqlite_mem);
+    assert(sqlite_rc == SQLITE_OK && "SQLITE_CONFIG_MALLOC must run before sqlite3_initialize");
+    (void)sqlite_rc;
+
+#if defined(HAVE_LIBGIT2)
+    /* libgit2. GIT_OPT_SET_ALLOCATOR MUST be set BEFORE git_libgit2_init():
+     * libgit2's git_allocator_global_init (run during init) installs the default
+     * stdalloc only if no custom allocator is set yet
+     * (`if (git__allocator.gmalloc != git_failalloc_malloc) return 0;`), and the
+     * pre-init global is the fail-allocator. There is no allocator-reset on
+     * git_libgit2_shutdown, so binding once here — before pass_githistory's
+     * per-call git_libgit2_init/shutdown pairs ever run — persists for the whole
+     * process. git_libgit2_opts(GIT_OPT_SET_ALLOCATOR,...) itself does not
+     * allocate, so calling it before init is safe. */
+    static git_allocator cbm_git_alloc = {
+        cbm_git_malloc,  /* gmalloc */
+        cbm_git_realloc, /* grealloc */
+        cbm_git_free,    /* gfree */
+    };
+    git_libgit2_opts(GIT_OPT_SET_ALLOCATOR, &cbm_git_alloc);
+#endif /* HAVE_LIBGIT2 */
+#endif /* CBM_BIND_TS_ALLOCATOR */
+}
+
 // --- Init/Shutdown ---
 
 static int cbm_initialized = 0;
@@ -241,6 +364,12 @@ int cbm_init(void) {
     }
     enum { CBM_INIT_DONE = 1 };
     cbm_initialized = CBM_INIT_DONE;
+    /* Defense-in-depth allocator binds (idempotent). main() calls cbm_alloc_init
+     * first; this covers non-main entry points (pipeline passes call cbm_init).
+     * For sqlite the SQLITE_CONFIG_MALLOC bind only takes effect if it runs
+     * before sqlite initializes — main() guarantees that ordering; here it is a
+     * best-effort idempotent re-assert for paths that never hit main(). */
+    cbm_alloc_init();
     return 0;
 }
 

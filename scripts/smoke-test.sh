@@ -96,9 +96,45 @@ database:
   host: localhost
 YAMLEOF
 
+# C++ crash reproduction (#424): a large, templated C++ header. The vendored
+# tree-sitter runtime previously corrupted the heap and SEGV'd mid-parse on
+# large templated C++ in the PRODUCTION build (MI_OVERRIDE=1) — most reliably on
+# Windows static-MinGW, where ts_malloc/ts_free could resolve to different
+# allocators. Generating a header with heavy parse churn exercises that path;
+# the prod binary must index it without crashing (status must be "indexed").
+python3 - "$TMPDIR/src/big_templated.hpp" << 'GENEOF'
+import sys
+with open(sys.argv[1], "w") as f:
+    f.write("#include <cstddef>\nnamespace repro {\n")
+    for i in range(1500):
+        f.write(
+            "template <typename T> struct Box{0} {{\n"
+            "  T value;\n"
+            "  bool operator<(const Box{0} &o) const {{ return value < o.value; }}\n"
+            "  bool operator==(const Box{0} &o) const {{ return value == o.value; }}\n"
+            "  bool operator>(const Box{0} &o) const {{ return o.value < value; }}\n"
+            "  T get() const {{ return value; }}\n"
+            "}};\n".format(i)
+        )
+    f.write("}\n")
+GENEOF
+
 # Index
 RESULT=$(cli index_repository "{\"repo_path\":\"$TMPDIR\"}")
 echo "$RESULT"
+
+# Allocator-integrity guard: the prod binary overrides the global allocator with
+# mimalloc. A misconfigured override (e.g. compiling alloc-override.c's
+# forwarding defs on a platform where system libs keep using the system
+# allocator) corrupts free() and mimalloc prints "mimalloc: error: ..." to
+# stderr — often WITHOUT a non-zero exit. Treat any such line as a hard failure.
+if grep -qiE 'mimalloc: error|mi_free: invalid pointer|mi_assert' "$CLI_STDERR"; then
+  echo "FAIL: mimalloc reported an allocator error during indexing"
+  echo "--- stderr ---"
+  cat "$CLI_STDERR"
+  echo "--- end stderr ---"
+  exit 1
+fi
 
 STATUS=$(echo "$RESULT" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('status',''))" 2>/dev/null || echo "")
 if [ "$STATUS" != "indexed" ]; then
@@ -560,6 +596,17 @@ fi
 if ! echo "$UPDATE_OUT" | grep -qi 'standard'; then
   echo "FAIL: update --dry-run did not respect --standard flag"
   exit 1
+fi
+# On Linux the binary must self-update from the static "-portable" asset: the
+# standard linux asset dynamically links glibc 2.38+ and breaks on older distros
+# (Debian 11, RHEL 8, Ubuntu 20.04). Guards build_update_url in src/cli/cli.c.
+if [ "$(uname -s)" = "Linux" ]; then
+  if ! echo "$UPDATE_OUT" | grep -q -- '-portable'; then
+    echo "FAIL: linux update --dry-run does not target the -portable asset"
+    echo "$UPDATE_OUT"
+    exit 1
+  fi
+  echo "OK: linux update targets the -portable (static) asset"
 fi
 echo "OK: update --dry-run --standard completed"
 

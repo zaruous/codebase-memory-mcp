@@ -79,7 +79,6 @@ extern const TSLanguage *tree_sitter_gleam(void);
 extern const TSLanguage *tree_sitter_powershell(void);
 extern const TSLanguage *tree_sitter_pascal(void);
 extern const TSLanguage *tree_sitter_d(void);
-extern const TSLanguage *tree_sitter_nim(void);
 extern const TSLanguage *tree_sitter_scheme(void);
 extern const TSLanguage *tree_sitter_fennel(void);
 extern const TSLanguage *tree_sitter_fish(void);
@@ -317,7 +316,7 @@ static const char *java_class_types[] = {"class_declaration",   "interface_decla
                                          "package_declaration", NULL};
 static const char *java_field_types[] = {"field_declaration", NULL};
 static const char *java_module_types[] = {"program", NULL};
-static const char *java_call_types[] = {"method_invocation", NULL};
+static const char *java_call_types[] = {"method_invocation", "object_creation_expression", NULL};
 static const char *java_import_types[] = {"import_declaration", "extends", "import", NULL};
 static const char *java_branch_types[] = {
     "if_statement",    "for_statement",     "enhanced_for_statement",
@@ -363,7 +362,7 @@ static const char *cs_class_types[] = {"class_declaration",
                                        "type_declaration",
                                        NULL};
 static const char *cs_module_types[] = {"compilation_unit", NULL};
-static const char *cs_call_types[] = {"invocation_expression", NULL};
+static const char *cs_call_types[] = {"invocation_expression", "object_creation_expression", NULL};
 static const char *cs_import_types[] = {"using_directive", "namespace_use_declaration",
                                         "using_statement", "namespace_declaration", NULL};
 static const char *cs_branch_types[] = {"if_statement",    "for_statement",    "foreach_statement",
@@ -371,7 +370,11 @@ static const char *cs_branch_types[] = {"if_statement",    "for_statement",    "
                                         "try_statement",   "catch_clause",     NULL};
 static const char *cs_var_types[] = {"field_declaration", "local_declaration_statement", NULL};
 static const char *cs_field_types[] = {"field_declaration", "property_declaration", NULL};
-static const char *cs_assign_types[] = {"assignment_expression", NULL};
+/* tree-sitter-c-sharp models `x++`/`++x` as postfix_/prefix_unary_expression
+ * (there is no `update_expression` node — that is a JS/TS kind), so a static
+ * field bump like `_count++` must list those node kinds to emit a WRITES. */
+static const char *cs_assign_types[] = {"assignment_expression", "postfix_unary_expression",
+                                        "prefix_unary_expression", NULL};
 static const char *cs_throw_types[] = {"throw_statement", "throw_expression", NULL};
 static const char *cs_decorator_types[] = {"attribute", NULL};
 
@@ -384,9 +387,9 @@ static const char *php_class_types[] = {"trait_declaration", "enum_declaration",
 static const char *php_import_types[] = {"extends", "include",         "namespace_use_declaration",
                                          "require", "use_declaration", NULL};
 static const char *php_module_types[] = {"program", NULL};
-static const char *php_call_types[] = {"member_call_expression", "scoped_call_expression",
-                                       "function_call_expression",
-                                       "nullsafe_member_call_expression", NULL};
+static const char *php_call_types[] = {
+    "member_call_expression",     "scoped_call_expression",          "function_call_expression",
+    "object_creation_expression", "nullsafe_member_call_expression", NULL};
 static const char *php_branch_types[] = {"if_statement",    "for_statement",    "foreach_statement",
                                          "while_statement", "switch_statement", "case_statement",
                                          "try_statement",   "catch_clause",     NULL};
@@ -412,8 +415,9 @@ static const char *scala_class_types[] = {"class_definition", "object_definition
                                           "trait_definition", "enum_definition",
                                           "type_definition",  NULL};
 static const char *scala_module_types[] = {"compilation_unit", NULL};
-static const char *scala_call_types[] = {"call_expression", "generic_function", "field_expression",
-                                         "infix_expression", NULL};
+static const char *scala_call_types[] = {"call_expression",     "generic_function",
+                                         "field_expression",    "infix_expression",
+                                         "instance_expression", NULL};
 static const char *scala_import_types[] = {"import_declaration", "extends", "import",
                                            "using_directive", NULL};
 static const char *scala_branch_types[] = {
@@ -423,6 +427,7 @@ static const char *scala_var_types[] = {"val_definition", "var_definition", "val
                                         "var_declaration", NULL};
 static const char *scala_assign_types[] = {"assignment_expression", NULL};
 static const char *scala_throw_types[] = {"throw_expression", NULL};
+static const char *scala_decorator_types[] = {"annotation", NULL};
 
 // ==================== KOTLIN ====================
 static const char *kotlin_func_types[] = {"function_declaration", "secondary_constructor",
@@ -862,6 +867,10 @@ static const CBMEmbeddedLangSpec html_embedded_imports[] = {
     {NULL, NULL, 0},
 };
 static const CBMEmbeddedLangSpec astro_embedded_imports[] = {
+    /* Astro component scripts live in the `---` frontmatter fence, which the
+     * grammar keeps as an unparsed frontmatter_js_block. Re-parse that slice
+     * with the JS grammar so `import X from './X.astro'` becomes a real edge. */
+    {"frontmatter", "frontmatter_js_block", CBM_LANG_JAVASCRIPT},
     {"script_element", "raw_text", CBM_LANG_JAVASCRIPT},
     {NULL, NULL, 0},
 };
@@ -1047,27 +1056,6 @@ static const char *pascal_assign_types[] = {"assignment", NULL};
 static const char *pascal_throw_types[] = {"raise", NULL};
 static const char *pascal_module_types[] = {"source_file", NULL};
 static const char *d_module_types[] = {"source_file", NULL};
-static const char *nim_func_types[] = {
-    "proc_declaration",     "func_declaration",  "method_declaration",    "iterator_declaration",
-    "template_declaration", "macro_declaration", "converter_declaration", NULL};
-static const char *nim_class_types[] = {"type_declaration", "object_declaration",
-                                        "enum_declaration", "concept_declaration", NULL};
-static const char *nim_field_types[] = {"field_declaration", NULL};
-static const char *nim_call_types[] = {"call", "dot_generic_call", NULL};
-static const char *nim_import_types[] = {"import_statement",
-                                         "import_from_statement",
-                                         "include_statement",
-                                         "export_statement",
-                                         "import",
-                                         "include",
-                                         NULL};
-static const char *nim_branch_types[] = {"if_statement", "for",           "while", "case",
-                                         "try",          "except_clause", "when",  NULL};
-static const char *nim_var_types[] = {"var_section", "let_section", "const_section", NULL};
-static const char *nim_assign_types[] = {"assignment", NULL};
-static const char *nim_throw_types[] = {"raise_statement", NULL};
-static const char *nim_decorator_types[] = {"pragma", NULL};
-static const char *nim_module_types[] = {"source_file", NULL};
 static const char *scheme_call_types[] = {"list", NULL};
 static const char *scheme_var_types[] = {"symbol", NULL};
 static const char *scheme_module_types[] = {"program", NULL};
@@ -1517,7 +1505,8 @@ static const char *smithy_class_types[] = {"structure_statement", "union_stateme
 static const char *smithy_field_types[] = {"shape_member", NULL};
 static const char *smithy_import_types[] = {"use_statement", NULL};
 static const char *smithy_module_types[] = {"source_file", NULL};
-static const char *wit_func_types[] = {"func_item", "resource_method", NULL};
+static const char *wit_func_types[] = {"func_item", "resource_method", "export_item", "import_item",
+                                       NULL};
 static const char *wit_class_types[] = {"record_item",   "resource_item", "enum_items",
                                         "variant_items", "flags_items",   NULL};
 static const char *wit_field_types[] = {"record_field", NULL};
@@ -1654,7 +1643,7 @@ static const CBMLangSpec lang_specs[CBM_LANG_COUNT] = {
     [CBM_LANG_SCALA] = {CBM_LANG_SCALA, scala_func_types, scala_class_types, empty_types,
                         scala_module_types, scala_call_types, scala_import_types,
                         scala_import_types, scala_branch_types, scala_var_types, scala_assign_types,
-                        scala_throw_types, NULL, empty_types, scala_env_funcs, NULL,
+                        scala_throw_types, NULL, scala_decorator_types, scala_env_funcs, NULL,
                         tree_sitter_scala, NULL},
 
     // CBM_LANG_KOTLIN
@@ -2041,12 +2030,6 @@ static const CBMLangSpec lang_specs[CBM_LANG_COUNT] = {
                         d_call_types, d_import_types, empty_types, d_branch_types, d_var_types,
                         d_assign_types, d_throw_types, NULL, empty_types, NULL, NULL, tree_sitter_d,
                         NULL},
-
-    // CBM_LANG_NIM
-    [CBM_LANG_NIM] = {CBM_LANG_NIM, nim_func_types, nim_class_types, nim_field_types,
-                      nim_module_types, nim_call_types, nim_import_types, empty_types,
-                      nim_branch_types, nim_var_types, nim_assign_types, nim_throw_types, NULL,
-                      nim_decorator_types, NULL, NULL, tree_sitter_nim, NULL},
 
     // CBM_LANG_SCHEME
     [CBM_LANG_SCHEME] = {CBM_LANG_SCHEME, empty_types, empty_types, empty_types,

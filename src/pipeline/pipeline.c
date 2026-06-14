@@ -391,13 +391,24 @@ static int process_one_infra_binding(cbm_gbuf_t *gbuf, const CBMInfraBinding *ib
     snprintf(topic_route_qn, sizeof(topic_route_qn), "__route__%s__%s",
              ib->broker ? ib->broker : "async", ib->source_name);
     const cbm_gbuf_node_t *topic_route = cbm_gbuf_find_by_qn(gbuf, topic_route_qn);
-    if (!topic_route) {
-        return 0;
+    int64_t topic_route_id;
+    if (topic_route) {
+        topic_route_id = topic_route->id;
+    } else {
+        /* The config file IS the declaration that the topic/queue/schedule exists;
+         * upsert its Route node so the binding maps even when no code-side dispatch
+         * call created the node first (e.g. a standalone scheduler/subscription
+         * manifest). */
+        topic_route_id = cbm_gbuf_upsert_node(gbuf, "Route", ib->source_name, topic_route_qn,
+                                              rel_path, 0, 0, ib->broker ? ib->broker : "async");
+        if (topic_route_id <= 0) {
+            return 0;
+        }
     }
     char props[CBM_SZ_512];
     snprintf(props, sizeof(props), "{\"broker\":\"%s\",\"topic\":\"%s\",\"endpoint\":\"%s\"}",
              ib->broker ? ib->broker : "async", ib->source_name, ib->target_url);
-    cbm_gbuf_insert_edge(gbuf, topic_route->id, url_route_id, "INFRA_MAPS", props);
+    cbm_gbuf_insert_edge(gbuf, topic_route_id, url_route_id, "INFRA_MAPS", props);
     return SKIP_ONE;
 }
 
@@ -563,6 +574,14 @@ static int run_sequential_pipeline(cbm_pipeline_t *p, cbm_pipeline_ctx_t *ctx,
         if (check_cancel(p)) {
             rc = CBM_NOT_FOUND;
         }
+    }
+    /* Consume infra bindings (YAML/HCL topic/queue/scheduler → endpoint) so
+     * INFRA_MAPS edges also form on the sequential path, not just the parallel
+     * one. process_one_infra_binding self-creates the topic Route node when no
+     * code-side dispatch created it (e.g. a standalone scheduler manifest). */
+    if (seq_cache && rc == 0) {
+        cbm_pipeline_extract_infra_routes(p->gbuf, files, seq_cache, file_count);
+        cbm_pipeline_process_infra_bindings(p->gbuf, files, seq_cache, file_count);
     }
     if (seq_cache) {
         for (int i = 0; i < file_count; i++) {

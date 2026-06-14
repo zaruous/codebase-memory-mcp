@@ -22,6 +22,22 @@ jobs:
       - name: "Layer 8: Vendored dependency integrity"
         run: scripts/security-vendored.sh
 
+  license-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Install ScanCode Toolkit
+        run: pipx install scancode-toolkit
+      - name: "Gate self-test (a planted violation must be detected)"
+        run: scripts/license-gate.sh --selftest
+      - name: "License compliance gate (one finding fails)"
+        run: scripts/license-gate.sh
+      - name: "License provenance audit (byte-identity vs upstream)"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: scripts/audit-license-provenance.py
+
   codeql-gate:
     runs-on: ubuntu-latest
     timeout-minutes: 50
@@ -30,7 +46,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          CURRENT_SHA="${{ github.sha }}"
+          # On pull_request events github.sha is the synthetic merge commit;
+          # CodeQL runs are recorded against the PR head SHA.
+          CURRENT_SHA="${{ github.event.pull_request.head.sha || github.sha }}"
           echo "Waiting for CodeQL to complete on $CURRENT_SHA..."
           for attempt in $(seq 1 90); do
             LATEST=$(gh api repos/${{ github.repository }}/actions/workflows/codeql.yml/runs?per_page=5 \

@@ -1875,7 +1875,10 @@ static char *handle_get_architecture(cbm_mcp_server_t *srv, const char *args) {
     }
 
     cbm_schema_info_t schema = {0};
-    cbm_store_get_schema(store, project, &schema);
+    /* Counts-only: this handler renders label/type counts but never property
+     * keys, and full key discovery json_each-scans every row (seconds-to-
+     * minutes on multi-million-node graphs). */
+    cbm_store_get_schema_counts(store, project, &schema);
 
     cbm_architecture_info_t arch = {0};
     cbm_store_get_architecture(store, project, aspects_strs_count > 0 ? aspects_strs : NULL,

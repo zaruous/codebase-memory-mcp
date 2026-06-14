@@ -1204,6 +1204,37 @@ TEST(cpp_function) {
     PASS();
 }
 
+/* --- C++ out-of-line method definitions (#428) ---
+ * A .cpp defining methods of a class declared elsewhere (not in this TU).
+ * Pre-fix these were recorded as free Functions (label "Function", no
+ * parent_class); they must be Methods linked to their enclosing class via
+ * parent_class. (The helper also descends nested scopes `ns::Class::method` to
+ * the immediate class, but tree-sitter-cpp parses a synthetic doubly-qualified
+ * out-of-line def in isolation as an ERROR node, so that path is exercised by
+ * real codebases rather than this isolated unit fixture.) */
+TEST(cpp_out_of_line_method_issue428) {
+    CBMFileResult *r = extract("void Foo::bar() {}\n"
+                               "int Foo::baz() { return 0; }\n",
+                               CBM_LANG_CPP, "t", "foo.cpp");
+    ASSERT_NOT_NULL(r);
+    ASSERT(has_def(r, "Method", "bar"));
+    ASSERT(has_def(r, "Method", "baz"));
+    ASSERT(!has_def(r, "Function", "bar")); /* not a free function */
+    /* parent_class links to the enclosing class QN */
+    int checked = 0;
+    for (int i = 0; i < r->defs.count; i++) {
+        const CBMDefinition *d = &r->defs.items[i];
+        if (strcmp(d->name, "bar") == 0 && strcmp(d->label, "Method") == 0) {
+            ASSERT_NOT_NULL(d->parent_class);
+            ASSERT(strstr(d->parent_class, "Foo") != NULL);
+            checked = 1;
+        }
+    }
+    ASSERT(checked);
+    cbm_free_result(r);
+    PASS();
+}
+
 /* --- COBOL paragraph --- */
 TEST(cobol_paragraph) {
     CBMFileResult *r =
@@ -2887,6 +2918,7 @@ SUITE(extraction) {
     RUN_TEST(rust_enum);
     RUN_TEST(zig_struct);
     RUN_TEST(cpp_function);
+    RUN_TEST(cpp_out_of_line_method_issue428);
     RUN_TEST(cobol_paragraph);
     RUN_TEST(verilog_module);
     RUN_TEST(cuda_kernel);

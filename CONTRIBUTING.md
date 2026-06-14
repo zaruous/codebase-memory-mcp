@@ -62,9 +62,9 @@ src/
   discover/         File discovery with gitignore support
   watcher/          Git-based background auto-sync
   cli/              CLI subcommands (install, update, uninstall, config)
-  ui/               Graph visualization HTTP server (mongoose)
+  ui/               Graph visualization HTTP server (first-party httpd)
 internal/cbm/       Tree-sitter AST extraction (64 languages, vendored C grammars)
-vendored/           sqlite3, yyjson, mongoose, mimalloc, xxhash, tre
+vendored/           sqlite3, yyjson, mimalloc, xxhash, tre, nomic
 graph-ui/           React/Three.js frontend for graph visualization
 scripts/            Build, test, lint, security audit scripts
 tests/              All C test files
@@ -162,6 +162,40 @@ If you add a new `system()`, `popen()`, `fork()`, or network call, it must be ju
 
 Check [issues labeled `good first issue`](https://github.com/DeusData/codebase-memory-mcp/labels/good%20first%20issue) for beginner-friendly tasks with clear scope and guidance.
 
-## License
+## License and sign-off (DCO) — required on every commit
 
-By contributing, you agree that your contributions will be licensed under the MIT License.
+All contributions are licensed under the project's MIT License
+(inbound = outbound). To make that explicit and permanent, this project
+uses the [Developer Certificate of Origin 1.1](DCO) — the same mechanism
+as the Linux kernel: **every commit must carry a `Signed-off-by` trailer
+matching the commit author.**
+
+```bash
+git commit -s             # adds: Signed-off-by: Your Name <you@example.com>
+```
+
+**Adding a `Signed-off-by` line to a commit constitutes your certification
+of the [Developer Certificate of Origin 1.1](DCO) — in full, all four
+clauses — for that contribution.** The sign-off must match the commit's
+author name and email (enforced by CI). In short: you certify that you
+wrote the change or otherwise have the right to submit it under the MIT
+license, and that you understand the contribution and your sign-off are
+public and permanent.
+
+(Independently of the DCO, submitting a contribution to this repository is
+also subject to GitHub's Terms of Service §D.6, under which contributions
+are licensed inbound = outbound — i.e., under this repository's MIT
+license.)
+
+Enforcement is strict and automated:
+
+- CI rejects every push and pull request containing an unsigned commit
+  (`scripts/check-dco.sh`).
+- Install the local hook so unsigned commits are rejected at commit time:
+
+```bash
+scripts/install-git-hooks.sh
+```
+
+Forgot to sign? `git commit --amend -s` fixes the last commit;
+`git rebase --signoff <base>` fixes a whole branch.
